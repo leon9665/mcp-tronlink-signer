@@ -1,6 +1,6 @@
 {
   "name": "mcp-tronlink-signer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP Server for signing Tron transactions via TronLink browser wallet",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,15 +14,27 @@
   },
   "keywords": [
     "mcp",
+    "model-context-protocol",
+    "claude",
     "tron",
     "tronlink",
     "wallet",
-    "signer"
+    "signer",
+    "blockchain"
   ],
   "files": [
     "dist"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/TronLink/mcp-tronlink-signer/tree/main/packages/mcp-tronlink-signer#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TronLink/mcp-tronlink-signer.git",
+    "directory": "packages/mcp-tronlink-signer"
+  },
+  "bugs": {
+    "url": "https://github.com/TronLink/mcp-tronlink-signer/issues"
+  },
   "engines": {
     "node": ">=18"
   },
