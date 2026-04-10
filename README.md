@@ -1,48 +1,49 @@
 # mcp-tronlink-signer
 
-Monorepo containing a TronLink browser wallet signer SDK and its MCP Server wrapper.
+[![npm: mcp-tronlink-signer](https://img.shields.io/npm/v/mcp-tronlink-signer)](https://www.npmjs.com/package/mcp-tronlink-signer)
+[![npm: tronlink-signer](https://img.shields.io/npm/v/tronlink-signer?label=npm%3A%20tronlink-signer)](https://www.npmjs.com/package/tronlink-signer)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-## Packages
+MCP Server for signing TRON transactions via TronLink browser wallet. Private keys never leave TronLink — all signing happens in the browser through a local approval page.
 
-| Package | Description |
-| ------- | ----------- |
-| [tronlink-signer](./packages/tronlink-signer) | Standalone SDK for signing TRON transactions via TronLink browser wallet |
-| [mcp-tronlink-signer](./packages/mcp-tronlink-signer) | MCP Server that exposes tronlink-signer as MCP tools |
+Also provides a standalone SDK ([tronlink-signer](./packages/tronlink-signer)) for direct integration without MCP.
 
-## Features
+## Quick Start
 
-- **connect_wallet** - Connect TronLink wallet
-- **send_trx** - Send TRX with browser approval
-- **send_trc20** - Send TRC20 tokens with browser approval
-- **sign_message** - Sign messages via TronLink
-- **sign_typed_data** - Sign EIP-712 typed data
-- **sign_transaction** - Sign raw transactions (no broadcast)
-- **get_balance** - Check TRX balance (no browser needed)
-
-All signing tools support an optional `network` parameter (`mainnet` / `nile` / `shasta`), defaulting to `mainnet`.
-
-## Usage
-
-### As MCP Server (Claude Code)
+### Claude Code
 
 ```bash
-claude mcp add -s user tronlink-signer -- node /path/to/packages/mcp-tronlink-signer/dist/cli.js
+claude mcp add -s user tronlink-signer -- npx mcp-tronlink-signer
 ```
 
-### As MCP Server (Claude Desktop / Cursor)
+### Claude Desktop / Cursor
 
 ```json
 {
   "mcpServers": {
     "tronlink-signer": {
-      "command": "node",
-      "args": ["/path/to/packages/mcp-tronlink-signer/dist/cli.js"]
+      "command": "npx",
+      "args": ["mcp-tronlink-signer"]
     }
   }
 }
 ```
 
-### As Standalone SDK
+## MCP Tools
+
+| Tool | Description | Parameters |
+| ---- | ----------- | ---------- |
+| `connect_wallet` | Connect TronLink wallet | `network?` |
+| `send_trx` | Send TRX to an address | `to`, `amount`, `network?` |
+| `send_trc20` | Send TRC20 tokens | `contractAddress`, `to`, `amount`, `decimals?`, `network?` |
+| `sign_message` | Sign a message | `message`, `network?` |
+| `sign_typed_data` | Sign EIP-712 typed data | `typedData`, `network?` |
+| `sign_transaction` | Sign a raw transaction | `transaction`, `network?` |
+| `get_balance` | Get TRX balance | `address`, `network?` |
+
+All tools support an optional `network` parameter (`mainnet` / `nile` / `shasta`), defaulting to `mainnet`.
+
+## Standalone SDK Usage
 
 ```ts
 import { TronSigner } from "tronlink-signer";
@@ -50,62 +51,43 @@ import { TronSigner } from "tronlink-signer";
 const signer = new TronSigner();
 await signer.start();
 
-// No need to call connectWallet() first — each signing operation
-// automatically handles wallet connection and network switching
-// in a single approval page.
+// Each signing operation automatically handles wallet connection
+// and network switching in a single approval page.
 const { signature } = await signer.signMessage("hello world");
 const { txId } = await signer.sendTrx("TXxx...", 1);
 const { balance } = await signer.getBalance("TXxx..."); // No browser needed
 
-// connectWallet() is available if you only need the address
-const { address } = await signer.connectWallet();
-
 await signer.stop();
 ```
 
-### Environment Variables
-
-| Variable | Description | Default |
-| -------- | ----------- | ------- |
-| `TRON_NETWORK` | Default network (mainnet/nile/shasta) | mainnet |
-| `TRON_HTTP_PORT` | Local HTTP server port | 3386 |
-| `TRON_API_KEY` | TronGrid API key (optional) | - |
+See [tronlink-signer README](./packages/tronlink-signer) for full API documentation.
 
 ## How It Works
 
-1. AI agent (or your code) calls a signing method (e.g., `signMessage`)
+1. AI agent (or your code) calls a signing method (e.g., `send_trx`)
 2. Local HTTP server starts on port 3386 and browser opens an approval page
 3. Approval page discovers wallet via **TIP-6963** protocol (fallback to `window.tron` / `window.tronLink`)
-4. Auto-unlocks wallet (`eth_requestAccounts`) and switches network (`wallet_switchEthereumChain`) if needed
+4. Auto-unlocks wallet and switches network if needed
 5. User reviews the request and clicks Approve / Reject
 6. TronLink extension handles signing in the browser
 7. Result is returned to the caller
 
 Private keys never leave the TronLink wallet.
 
-### Network Selection
+## Environment Variables
 
-Each tool accepts an optional `network` parameter. If provided, the approval page will automatically prompt TronLink to switch to the specified network. If omitted, the default network (`mainnet`) is used.
+| Variable | Description | Default |
+| -------- | ----------- | ------- |
+| `TRON_NETWORK` | Default network (mainnet/nile/shasta) | `mainnet` |
+| `TRON_HTTP_PORT` | Local HTTP server port | `3386` |
+| `TRON_API_KEY` | TronGrid API key (optional) | - |
 
-```jsonc
-sign_message({ message: "hello", network: "nile" })   // Use Nile testnet
-sign_message({ message: "hello" })                     // Use default (mainnet)
-```
+## Packages
 
-### EIP-712 Typed Data Signing
-
-```jsonc
-sign_typed_data({
-  typedData: {
-    domain: { name: "MyDApp", version: "1", chainId: 728126428 },
-    types: {
-      Greeting: [{ name: "contents", type: "string" }]
-    },
-    primaryType: "Greeting",
-    message: { contents: "Hello Tron!" }
-  }
-})
-```
+| Package | Description |
+| ------- | ----------- |
+| [mcp-tronlink-signer](./packages/mcp-tronlink-signer) | MCP Server — exposes signing tools for Claude and other AI clients |
+| [tronlink-signer](./packages/tronlink-signer) | Standalone SDK — direct integration without MCP |
 
 ## Development
 

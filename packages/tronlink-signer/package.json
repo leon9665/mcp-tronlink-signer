@@ -18,14 +18,25 @@
   "keywords": [
     "tron",
     "tronlink",
+    "tronweb",
     "wallet",
     "signer",
+    "blockchain",
     "tip-6963"
   ],
   "files": [
     "dist"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/TronLink/mcp-tronlink-signer/tree/main/packages/tronlink-signer#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TronLink/mcp-tronlink-signer.git",
+    "directory": "packages/tronlink-signer"
+  },
+  "bugs": {
+    "url": "https://github.com/TronLink/mcp-tronlink-signer/issues"
+  },
   "engines": {
     "node": ">=18"
   },
