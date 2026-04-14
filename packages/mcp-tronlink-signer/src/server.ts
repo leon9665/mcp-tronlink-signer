@@ -16,61 +16,114 @@ export function createMcpServer(signer: TronSigner): McpServer {
     version: "0.1.0",
   });
 
+  const SIGN_NOTICE = "⚠️ ACTION REQUIRED: Please switch to your browser and approve/reject this request in the TronLink Signer page.";
+
+  function signingResult(result: unknown) {
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(result) },
+      ],
+    };
+  }
+
+  function signingError(e: unknown) {
+    return {
+      content: [{ type: "text" as const, text: `Error: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
+
   // Tools
 
-  server.tool("connect_wallet", "Connect to TronLink wallet", ConnectWalletSchema.shape, async ({ network }) => {
-    try {
-      const result = await signer.connectWallet(network);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+  server.tool(
+    "connect_wallet",
+    `Connect to TronLink wallet. ${SIGN_NOTICE}`,
+    ConnectWalletSchema.shape,
+    async ({ network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for wallet connection approval in browser...\n`);
+      try {
+        const result = await signer.connectWallet(network);
+        return signingResult(result);
+      } catch (e) {
+        return signingError(e);
+      }
     }
-  });
+  );
 
-  server.tool("send_trx", "Send TRX to an address", SendTrxSchema.shape, async ({ to, amount, network }) => {
-    try {
-      const result = await signer.sendTrx(to, amount, network);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+  server.tool(
+    "send_trx",
+    `Send TRX to an address. ${SIGN_NOTICE}`,
+    SendTrxSchema.shape,
+    async ({ to, amount, network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for transaction approval in browser... (send ${amount} TRX to ${to})\n`);
+      try {
+        const result = await signer.sendTrx(to, amount, network);
+        return signingResult(result);
+      } catch (e) {
+        return signingError(e);
+      }
     }
-  });
+  );
 
-  server.tool("send_trc20", "Send TRC20 tokens", SendTrc20Schema.shape, async ({ contractAddress, to, amount, decimals, network }) => {
-    try {
-      const result = await signer.sendTrc20(contractAddress, to, amount, decimals, network);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+  server.tool(
+    "send_trc20",
+    `Send TRC20 tokens. ${SIGN_NOTICE}`,
+    SendTrc20Schema.shape,
+    async ({ contractAddress, to, amount, decimals, network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for TRC20 transfer approval in browser... (${amount} to ${to})\n`);
+      try {
+        const result = await signer.sendTrc20(contractAddress, to, amount, decimals, network);
+        return signingResult(result);
+      } catch (e) {
+        return signingError(e);
+      }
     }
-  });
+  );
 
-  server.tool("sign_message", "Sign a message with the wallet", SignMessageSchema.shape, async ({ message, network }) => {
-    try {
-      const result = await signer.signMessage(message, network);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+  server.tool(
+    "sign_message",
+    `Sign a message with the wallet. ${SIGN_NOTICE}`,
+    SignMessageSchema.shape,
+    async ({ message, network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for message signing approval in browser...\n`);
+      try {
+        const result = await signer.signMessage(message, network);
+        return signingResult(result);
+      } catch (e) {
+        return signingError(e);
+      }
     }
-  });
+  );
 
-  server.tool("sign_typed_data", "Sign EIP-712 typed data", SignTypedDataSchema.shape, async ({ typedData, network }) => {
-    try {
-      const result = await signer.signTypedData(typedData, network);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+  server.tool(
+    "sign_typed_data",
+    `Sign EIP-712 typed data. ${SIGN_NOTICE}`,
+    SignTypedDataSchema.shape,
+    async ({ typedData, network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for typed data signing approval in browser...\n`);
+      try {
+        const result = await signer.signTypedData(typedData, network);
+        return signingResult(result);
+      } catch (e) {
+        return signingError(e);
+      }
     }
-  });
+  );
 
-  server.tool("sign_transaction", "Sign a raw transaction", SignTransactionSchema.shape, async ({ transaction, network }) => {
-    try {
-      const result = await signer.signTransaction(transaction, network);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: `Error: ${(e as Error).message}` }], isError: true };
+  server.tool(
+    "sign_transaction",
+    `Sign a raw transaction. ${SIGN_NOTICE}`,
+    SignTransactionSchema.shape,
+    async ({ transaction, network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for transaction signing approval in browser...\n`);
+      try {
+        const result = await signer.signTransaction(transaction, network);
+        return signingResult(result);
+      } catch (e) {
+        return signingError(e);
+      }
     }
-  });
+  );
 
   server.tool("get_balance", "Get TRX balance for an address", GetBalanceSchema.shape, async ({ address, network }) => {
     try {

@@ -7,6 +7,14 @@ import { NETWORKS, loadConfig } from "./config.js";
 import type { AppConfig, TronNetwork, SendTrxData, SendTrc20Data, SignMessageData, SignTypedDataData, SignTransactionData } from "./types.js";
 // @ts-ignore - HTML imported as text via tsup loader
 import htmlContent from "./web/index.html";
+// @ts-ignore - JS imported as text via tsup loader
+import walletJs from "./web/js/wallet.js";
+// @ts-ignore - JS imported as text via tsup loader
+import txParserJs from "./web/js/tx-parser.js";
+// @ts-ignore - JS imported as text via tsup loader
+import actionsJs from "./web/js/actions.js";
+// @ts-ignore - JS imported as text via tsup loader
+import appJs from "./web/js/app.js";
 
 export class TronSigner {
   private config: AppConfig;
@@ -29,12 +37,25 @@ export class TronSigner {
     // @ts-ignore - tronweb constructor typing
     this.tronWeb = new TronWeb(tronWebOptions);
 
-    this.httpServer = new HttpServer(this.pendingStore, htmlContent as string);
+    this.httpServer = new HttpServer(this.pendingStore, htmlContent as string, {
+      'wallet.js': walletJs as string,
+      'tx-parser.js': txParserJs as string,
+      'actions.js': actionsJs as string,
+      'app.js': appJs as string,
+    });
   }
 
   async start(): Promise<void> {
     await this.httpServer.start(this.config.httpPort);
     console.error(`HTTP server started on http://127.0.0.1:${this.httpServer.getPort()}`);
+
+    // Ensure HTTP server is closed when the process exits
+    const cleanup = () => {
+      this.httpServer.stop().catch(() => {});
+    };
+    process.on("SIGINT", cleanup);
+    process.on("SIGTERM", cleanup);
+    process.on("beforeExit", cleanup);
   }
 
   private getPort(): number {
@@ -54,11 +75,11 @@ export class TronSigner {
     return network || this.config.network;
   }
 
-  async connectWallet(network?: TronNetwork): Promise<{ address: string }> {
+  async connectWallet(network?: TronNetwork): Promise<{ address: string; network: string }> {
     const net = this.resolveNetwork(network);
     const { id, promise } = this.pendingStore.create("connect", {}, net);
     await openApprovalPage(this.getPort(), id);
-    const result = (await promise) as { address: string };
+    const result = (await promise) as { address: string; network: string };
     return result;
   }
 

@@ -13,5 +13,8 @@ export default defineConfig({
   splitting: false,
   loader: {
     ".html": "text",
+    // .js files under src/web/js/ are imported as text strings, not as modules.
+    // This only affects explicitly imported .js files; .ts source files use the ts loader.
+    ".js": "text",
   },
 });

@@ -42,7 +42,6 @@ export class PendingStore {
 
   get(id: string): PendingRequest | undefined {
     const entry = this.pending.get(id);
-    console.error(`[PendingStore] Get request: ${id}, found: ${!!entry}, total pending: ${this.pending.size}`);
     return entry?.request;
   }
 
@@ -62,6 +61,16 @@ export class PendingStore {
     this.pending.delete(id);
     entry.reject(new Error(error));
     return true;
+  }
+
+  getNext(): PendingRequest | undefined {
+    let oldest: PendingEntry | undefined;
+    for (const entry of this.pending.values()) {
+      if (!oldest || entry.request.createdAt < oldest.request.createdAt) {
+        oldest = entry;
+      }
+    }
+    return oldest?.request;
   }
 
   size(): number {
