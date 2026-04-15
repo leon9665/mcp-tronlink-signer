@@ -6,7 +6,8 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "publish:all": "pnpm -r build && pnpm -r publish --access public --no-git-checks"
   },
   "engines": {
     "node": ">=18"

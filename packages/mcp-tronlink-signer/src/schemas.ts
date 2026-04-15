@@ -16,7 +16,7 @@ export const SendTrc20Schema = z.object({
   to: z.string().describe("Recipient Tron address (base58)"),
   amount: z
     .string()
-    .describe("Amount of tokens to send (in smallest unit before decimals)"),
+    .describe("Amount of tokens to send in human-readable units (e.g. '1.5' for 1.5 USDT). Decimals conversion is handled automatically."),
   decimals: z
     .number()
     .int()
@@ -44,6 +44,11 @@ export const SignTransactionSchema = z.object({
   transaction: z
     .record(z.string(), z.unknown())
     .describe("Raw transaction object to sign"),
+  broadcast: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Whether to broadcast the signed transaction on-chain (default: false)"),
   network: NetworkSchema,
 });
 

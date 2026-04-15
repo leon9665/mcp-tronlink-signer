@@ -1,18 +1,24 @@
 import express, { type Express, type Request, type Response } from "express";
 import type { Server } from "node:http";
+import { randomUUID } from "node:crypto";
 import { PendingStore } from "./pending-store.js";
 import { NETWORKS } from "./config.js";
+import { recordHeartbeat } from "./browser.js";
 
 export class HttpServer {
   private app: Express;
   private server: Server | null = null;
   private pendingStore: PendingStore;
   private htmlContent: string;
+  private jsFiles: Record<string, string>;
   private port: number = 0;
+  private sessionId: string;
 
-  constructor(pendingStore: PendingStore, htmlContent: string) {
+  constructor(pendingStore: PendingStore, htmlContent: string, jsFiles: Record<string, string> = {}) {
     this.pendingStore = pendingStore;
     this.htmlContent = htmlContent;
+    this.jsFiles = jsFiles;
+    this.sessionId = randomUUID();
     this.app = express();
     this.setupRoutes();
   }
@@ -23,6 +29,28 @@ export class HttpServer {
     this.app.get("/", (_req: Request, res: Response) => {
       res.setHeader("Content-Type", "text/html");
       res.send(this.htmlContent);
+    });
+
+    this.app.get("/js/:name", (req: Request, res: Response) => {
+      const content = this.jsFiles[req.params.name as string];
+      if (!content) {
+        res.status(404).send("Not found");
+        return;
+      }
+      res.setHeader("Content-Type", "application/javascript");
+      res.send(content);
+    });
+
+    this.app.get("/api/pending/next", (_req: Request, res: Response) => {
+      const next = this.pendingStore.getNext();
+      if (!next) {
+        res.status(404).json({ error: "No pending request" });
+        return;
+      }
+      res.json({
+        ...next,
+        networkConfig: NETWORKS[next.network],
+      });
     });
 
     this.app.get("/api/pending/:id", (req: Request, res: Response) => {
@@ -56,6 +84,20 @@ export class HttpServer {
         }
         res.json({ ok: true });
       }
+    });
+
+    this.app.get("/api/session", (_req: Request, res: Response) => {
+      res.json({ sessionId: this.sessionId });
+    });
+
+    this.app.post("/api/heartbeat", (req: Request, res: Response) => {
+      const clientSession = req.body && req.body.sessionId;
+      if (clientSession && clientSession !== this.sessionId) {
+        res.status(410).json({ error: "Session expired", sessionId: this.sessionId });
+        return;
+      }
+      recordHeartbeat();
+      res.json({ ok: true, sessionId: this.sessionId });
     });
 
     this.app.get("/api/health", (_req: Request, res: Response) => {
