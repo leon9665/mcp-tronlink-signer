@@ -243,7 +243,7 @@
       try { symbol = await contract.methods.symbol().call(); } catch(e) {}
 
       var raw = BigInt(trc20.rawAmount);
-      var divisor = BigInt(10 ** Number(decimals));
+      var divisor = 10n ** BigInt(decimals);
       var whole = raw / divisor;
       var frac = raw % divisor;
       var formatted = whole.toString();

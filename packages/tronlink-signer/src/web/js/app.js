@@ -13,6 +13,7 @@
   var pendingRequest = null;
   var currentRequestId = null;
   var polling = false;
+  var sessionId = null;
 
   var NETWORK_NAMES = {
     mainnet: 'Mainnet',
@@ -20,12 +21,31 @@
     shasta: 'Shasta Testnet'
   };
 
-  // Heartbeat — detect server disconnect
+  function markSessionExpired() {
+    sessionExpired = true;
+    setStatus('Session expired. Please close this tab and try again.', 'error');
+    buttonGroup.style.display = 'none';
+    retryGroup.style.display = 'none';
+    approveBtn.disabled = true;
+    rejectBtn.disabled = true;
+  }
+
+  // Heartbeat — detect server disconnect or session change
   var heartbeatFailCount = 0;
   var sessionExpired = false;
   setInterval(function() {
-    fetch('/api/heartbeat', { method: 'POST' })
+    if (sessionExpired) return;
+    fetch('/api/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionId })
+    })
       .then(function(res) {
+        if (res.status === 410) {
+          // Server restarted with new session
+          markSessionExpired();
+          return;
+        }
         if (res.ok) {
           heartbeatFailCount = 0;
         } else {
@@ -37,12 +57,7 @@
       })
       .finally(function() {
         if (heartbeatFailCount >= 3 && !sessionExpired) {
-          sessionExpired = true;
-          setStatus('Session expired. Please restart and try again.', 'error');
-          buttonGroup.style.display = 'none';
-          retryGroup.style.display = 'none';
-          approveBtn.disabled = true;
-          rejectBtn.disabled = true;
+          markSessionExpired();
         }
       });
   }, 3000);
@@ -105,6 +120,9 @@
         addDetail('Typed Data', JSON.stringify(data.typedData, null, 2));
         break;
       case 'sign_transaction': {
+        if (data.broadcast) {
+          addDetail('Broadcast', 'Yes (will send on-chain after signing)');
+        }
         var parsed = window.TxParser.parseTransaction(data.transaction);
         if (parsed) {
           addDetail('Type', parsed.label);
@@ -133,12 +151,15 @@
 
       // Auto-complete connect requests once wallet is ready
       if (pendingRequest.type === 'connect') {
-        // Wait a bit for tronWeb.defaultAddress to populate
         for (var i = 0; i < 10; i++) {
           var addr = window.TronWallet.getAddress();
           if (addr) {
-            setStatus('Wallet connected: ' + addr, 'success');
-            await completeRequest(currentRequestId, true, { address: addr, network: window.TronWallet.getCurrentNetwork() });
+            try {
+              await completeRequest(currentRequestId, true, { address: addr, network: window.TronWallet.getCurrentNetwork() });
+              setStatus('Wallet connected: ' + addr, 'success');
+            } catch (_) {
+              setStatus('Request expired or no longer available.', 'error');
+            }
             startPollingAfterDone();
             return;
           }
@@ -160,11 +181,14 @@
     var body = success
       ? { success: true, result: resultOrError }
       : { success: false, error: resultOrError };
-    await fetch('/api/complete/' + id, {
+    var res = await fetch('/api/complete/' + id, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (!res.ok) {
+      throw new Error('Request expired or no longer available.');
+    }
   }
 
   async function handleRequest(req) {
@@ -202,6 +226,7 @@
     var maxInterval = 5000;
 
     while (true) {
+      if (sessionExpired) { polling = false; return; }
       try {
         var res = await fetch('/api/pending/next');
         if (res.ok) {
@@ -242,23 +267,39 @@
       var result = await window.TronActions.execute(pendingRequest);
       await completeRequest(currentRequestId, true, result);
       setStatus('Approved and completed successfully.', 'success');
-      startPollingAfterDone();
     } catch (e) {
       var msg = e.message || String(e);
-      await completeRequest(currentRequestId, false, msg);
+      try {
+        await completeRequest(currentRequestId, false, msg);
+      } catch (_) {
+        // Request already expired, ignore
+      }
       setStatus('Error: ' + msg, 'error');
-      startPollingAfterDone();
     }
+    startPollingAfterDone();
   });
 
   rejectBtn.addEventListener('click', async function() {
     disableButtons();
-    setStatus('Rejected.', 'error');
-    await completeRequest(currentRequestId, false, 'USER_REJECTED');
+    try {
+      await completeRequest(currentRequestId, false, 'USER_REJECTED');
+      setStatus('Rejected.', 'error');
+    } catch (_) {
+      setStatus('Request expired or no longer available.', 'error');
+    }
     startPollingAfterDone();
   });
 
   // --- Init ---
   window.TronWallet.discoverWallets();
-  pollForRequests();
+  // Fetch session ID before starting, then poll
+  fetch('/api/session').then(function(res) {
+    return res.json();
+  }).then(function(data) {
+    sessionId = data.sessionId;
+    pollForRequests();
+  }).catch(function() {
+    // Server might not be ready yet, start polling anyway
+    pollForRequests();
+  });
 })();

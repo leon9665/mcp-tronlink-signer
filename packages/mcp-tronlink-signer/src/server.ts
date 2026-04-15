@@ -114,10 +114,10 @@ export function createMcpServer(signer: TronSigner): McpServer {
     "sign_transaction",
     `Sign a raw transaction. ${SIGN_NOTICE}`,
     SignTransactionSchema.shape,
-    async ({ transaction, network }) => {
-      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for transaction signing approval in browser...\n`);
+    async ({ transaction, broadcast, network }) => {
+      console.error(`\n🔔 [mcp-tronlink-signer] Waiting for transaction signing approval in browser...${broadcast ? ' (will broadcast)' : ''}\n`);
       try {
-        const result = await signer.signTransaction(transaction, network);
+        const result = await signer.signTransaction(transaction, network, broadcast);
         return signingResult(result);
       } catch (e) {
         return signingError(e);

@@ -71,6 +71,7 @@ export class TronSigner {
     return this.config;
   }
 
+
   private resolveNetwork(network?: TronNetwork): TronNetwork {
     return network || this.config.network;
   }
@@ -135,13 +136,14 @@ export class TronSigner {
 
   async signTransaction(
     transaction: Record<string, unknown>,
-    network?: TronNetwork
-  ): Promise<{ signedTransaction: Record<string, unknown> }> {
+    network?: TronNetwork,
+    broadcast?: boolean
+  ): Promise<{ signedTransaction: Record<string, unknown>; txId?: string }> {
     const net = this.resolveNetwork(network);
-    const data: SignTransactionData = { transaction };
+    const data: SignTransactionData = { transaction, broadcast: broadcast ?? false };
     const { id, promise } = this.pendingStore.create("sign_transaction", data, net);
     await openApprovalPage(this.getPort(), id);
-    const result = (await promise) as { signedTransaction: Record<string, unknown> };
+    const result = (await promise) as { signedTransaction: Record<string, unknown>; txId?: string };
     return result;
   }
 

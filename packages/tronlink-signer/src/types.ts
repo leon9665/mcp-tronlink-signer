@@ -46,6 +46,7 @@ export interface SignTypedDataData {
 
 export interface SignTransactionData {
   transaction: Record<string, unknown>;
+  broadcast?: boolean;
 }
 
 export interface AppConfig {

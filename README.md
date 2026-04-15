@@ -38,7 +38,7 @@ claude mcp add -s user tronlink-signer -- npx mcp-tronlink-signer
 | `send_trc20` | Send TRC20 tokens | `contractAddress`, `to`, `amount`, `decimals?`, `network?` |
 | `sign_message` | Sign a message | `message`, `network?` |
 | `sign_typed_data` | Sign EIP-712 typed data | `typedData`, `network?` |
-| `sign_transaction` | Sign a raw transaction | `transaction`, `network?` |
+| `sign_transaction` | Sign a raw transaction (optionally broadcast) | `transaction`, `broadcast?`, `network?` |
 | `get_balance` | Get TRX balance | `address`, `network?` |
 
 All tools support an optional `network` parameter (`mainnet` / `nile` / `shasta`), defaulting to `mainnet`.
@@ -55,6 +55,8 @@ await signer.start();
 const { address, network } = await signer.connectWallet();
 const { signature } = await signer.signMessage("hello world");
 const { txId } = await signer.sendTrx("TXxx...", 1);
+const { signedTransaction } = await signer.signTransaction(tx); // Sign only
+const { txId: broadcastTxId } = await signer.signTransaction(tx, "nile", true); // Sign + broadcast
 const { balance } = await signer.getBalance("TXxx..."); // No browser needed
 
 await signer.stop();
@@ -73,7 +75,7 @@ See [tronlink-signer README](./packages/tronlink-signer) for full API documentat
 7. TronLink extension handles signing in the browser
 8. Result is returned to the caller — the page stays open and polls for the next request
 
-All subsequent operations reuse the same browser tab. The page detects server disconnection via heartbeat and shows a session expired message. Private keys never leave the TronLink wallet.
+All subsequent operations reuse the same browser tab. Each server session has a unique ID — old browser tabs from previous sessions are automatically invalidated. The page detects server disconnection via heartbeat and shows a session expired message. Private keys never leave the TronLink wallet.
 
 ## Environment Variables
 

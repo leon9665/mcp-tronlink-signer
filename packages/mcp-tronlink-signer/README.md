@@ -46,7 +46,7 @@ claude mcp add -s user tronlink-signer -- node /path/to/packages/mcp-tronlink-si
 | `send_trc20` | Send TRC20 tokens | `contractAddress`, `to`, `amount`, `decimals?`, `network?` |
 | `sign_message` | Sign a message | `message`, `network?` |
 | `sign_typed_data` | Sign EIP-712 typed data | `typedData`, `network?` |
-| `sign_transaction` | Sign a raw transaction | `transaction`, `network?` |
+| `sign_transaction` | Sign a raw transaction (optionally broadcast) | `transaction`, `broadcast?`, `network?` |
 | `get_balance` | Get TRX balance | `address`, `network?` |
 
 All tools support an optional `network` parameter (`mainnet` / `nile` / `shasta`), defaulting to `mainnet`.

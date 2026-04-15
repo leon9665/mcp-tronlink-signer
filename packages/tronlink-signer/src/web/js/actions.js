@@ -13,19 +13,32 @@
         var tx = await tronWeb.transactionBuilder.sendTrx(data.to, tronWeb.toSun(data.amount));
         var signedTx = await tronWeb.trx.sign(tx);
         var broadcast = await tronWeb.trx.sendRawTransaction(signedTx);
+        if (broadcast.result === false) {
+          throw new Error('Broadcast failed: ' + (broadcast.message || broadcast.code || 'unknown error'));
+        }
         return { txId: broadcast.txid };
       }
       case 'send_trc20': {
         var contract = await tronWeb.contract().at(data.contractAddress);
-        var decimals = data.decimals || 6;
-        var parts = String(data.amount).split('.');
+        var decimals = (data.decimals !== undefined && data.decimals !== null) ? data.decimals : 6;
+        var amountStr = String(data.amount).trim();
+        if (!/^\d+(\.\d+)?$/.test(amountStr)) {
+          throw new Error('Invalid amount format: ' + data.amount);
+        }
+        var parts = amountStr.split('.');
         var whole = parts[0] || '0';
         var fracInput = parts[1] || '';
         if (fracInput.length > decimals) {
           throw new Error('Amount has too many decimal places (max ' + decimals + ' for this token). Got: ' + data.amount);
         }
-        var frac = fracInput.padEnd(decimals, '0');
-        var rawAmount = BigInt(whole) * BigInt(10 ** decimals) + BigInt(frac);
+        if (decimals > 18) {
+          throw new Error('Decimals too large (max 18). Got: ' + decimals);
+        }
+        var frac = decimals > 0 ? fracInput.padEnd(decimals, '0') : '';
+        var multiplier = 10n ** BigInt(decimals);
+        var rawAmount = decimals > 0
+          ? BigInt(whole) * multiplier + BigInt(frac)
+          : BigInt(whole);
         if (rawAmount === 0n) {
           throw new Error('Amount is zero after conversion. Please check the amount: ' + data.amount);
         }
@@ -47,6 +60,13 @@
       }
       case 'sign_transaction': {
         var signed = await tronWeb.trx.sign(data.transaction);
+        if (data.broadcast) {
+          var broadcast = await tronWeb.trx.sendRawTransaction(signed);
+          if (broadcast.result === false) {
+            throw new Error('Broadcast failed: ' + (broadcast.message || broadcast.code || 'unknown error'));
+          }
+          return { signedTransaction: signed, txId: broadcast.txid };
+        }
         return { signedTransaction: signed };
       }
       default:

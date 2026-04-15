@@ -1,5 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
 import type { Server } from "node:http";
+import { randomUUID } from "node:crypto";
 import { PendingStore } from "./pending-store.js";
 import { NETWORKS } from "./config.js";
 import { recordHeartbeat } from "./browser.js";
@@ -11,11 +12,13 @@ export class HttpServer {
   private htmlContent: string;
   private jsFiles: Record<string, string>;
   private port: number = 0;
+  private sessionId: string;
 
   constructor(pendingStore: PendingStore, htmlContent: string, jsFiles: Record<string, string> = {}) {
     this.pendingStore = pendingStore;
     this.htmlContent = htmlContent;
     this.jsFiles = jsFiles;
+    this.sessionId = randomUUID();
     this.app = express();
     this.setupRoutes();
   }
@@ -83,9 +86,18 @@ export class HttpServer {
       }
     });
 
-    this.app.post("/api/heartbeat", (_req: Request, res: Response) => {
+    this.app.get("/api/session", (_req: Request, res: Response) => {
+      res.json({ sessionId: this.sessionId });
+    });
+
+    this.app.post("/api/heartbeat", (req: Request, res: Response) => {
+      const clientSession = req.body && req.body.sessionId;
+      if (clientSession && clientSession !== this.sessionId) {
+        res.status(410).json({ error: "Session expired", sessionId: this.sessionId });
+        return;
+      }
       recordHeartbeat();
-      res.json({ ok: true });
+      res.json({ ok: true, sessionId: this.sessionId });
     });
 
     this.app.get("/api/health", (_req: Request, res: Response) => {
