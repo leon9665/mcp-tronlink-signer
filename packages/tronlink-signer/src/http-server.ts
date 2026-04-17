@@ -20,6 +20,7 @@ export class HttpServer {
   private jsFiles: Record<string, string>;
   private port: number = 0;
   private sessionId: string;
+  public onWalletChanged: ((reason: string) => void) | null = null;
 
   constructor(pendingStore: PendingStore, htmlContent: string, jsFiles: Record<string, string> = {}) {
     this.pendingStore = pendingStore;
@@ -89,6 +90,13 @@ export class HttpServer {
       res.send(content);
     });
 
+    this.app.get("/api/pending", (_req: Request, res: Response) => {
+      const all = this.pendingStore.getAll();
+      res.json({
+        requests: all.map((r) => ({ ...r, networkConfig: NETWORKS[r.network] })),
+      });
+    });
+
     this.app.get("/api/pending/next", (_req: Request, res: Response) => {
       const next = this.pendingStore.getNext();
       if (!next) {
@@ -143,6 +151,14 @@ export class HttpServer {
       if (!this.requireSession(req, res)) return;
       recordHeartbeat();
       res.json({ ok: true, sessionId: this.sessionId });
+    });
+
+    this.app.post("/api/wallet-changed", (req: Request, res: Response) => {
+      if (!this.requireSession(req, res)) return;
+      const reason = (req.body && typeof req.body.reason === "string" ? req.body.reason : "changed") as string;
+      this.pendingStore.clearAll(`WALLET_CHANGED: ${reason}`);
+      if (this.onWalletChanged) this.onWalletChanged(reason);
+      res.json({ ok: true });
     });
 
     this.app.get("/api/health", (_req: Request, res: Response) => {

@@ -4,16 +4,19 @@
   var detailsEl = document.getElementById('details');
   var typeBadgeEl = document.getElementById('typeBadge');
   var networkBadgeEl = document.getElementById('networkBadge');
+  var tabBarEl = document.getElementById('tabBar');
   var buttonGroup = document.getElementById('buttonGroup');
   var retryGroup = document.getElementById('retryGroup');
   var retryBtn = document.getElementById('retryBtn');
   var approveBtn = document.getElementById('approveBtn');
   var rejectBtn = document.getElementById('rejectBtn');
 
-  var pendingRequest = null;
+  var pendingRequests = {};   // id -> request
+  var pendingRequest = null;  // currently active request object
   var currentRequestId = null;
   var polling = false;
   var sessionId = null;
+  var lastResultAt = 0;       // suppress idle status overwrite right after approve/reject
 
   var NETWORK_NAMES = {
     mainnet: 'Mainnet',
@@ -32,6 +35,7 @@
     retryGroup.style.display = 'none';
     approveBtn.disabled = true;
     rejectBtn.disabled = true;
+    tabBarEl.innerHTML = '';
   }
   setInterval(function() {
     if (sessionExpired) return;
@@ -43,23 +47,15 @@
     })
       .then(function(res) {
         if (res.status === 410) {
-          // Server restarted with new session
           markSessionExpired();
           return;
         }
-        if (res.ok) {
-          heartbeatFailCount = 0;
-        } else {
-          heartbeatFailCount++;
-        }
+        if (res.ok) heartbeatFailCount = 0;
+        else heartbeatFailCount++;
       })
-      .catch(function() {
-        heartbeatFailCount++;
-      })
+      .catch(function() { heartbeatFailCount++; })
       .finally(function() {
-        if (heartbeatFailCount >= 3 && !sessionExpired) {
-          markSessionExpired();
-        }
+        if (heartbeatFailCount >= 3 && !sessionExpired) markSessionExpired();
       });
   }, 1000);
 
@@ -88,35 +84,112 @@
     rejectBtn.disabled = true;
   }
 
-  // --- Validity watcher: detect server-side cancellation ---
-  var validityTimer = null;
-
-  function startValidityWatch(requestId) {
-    stopValidityWatch();
-    validityTimer = setInterval(async function() {
-      if (sessionExpired) { stopValidityWatch(); return; }
-      try {
-        var res = await fetch('/api/pending/' + requestId);
-        if (!res.ok) {
-          stopValidityWatch();
-          setStatus('Request was cancelled.', 'info');
-          buttonGroup.style.display = 'none';
-          retryGroup.style.display = 'none';
-          detailsEl.innerHTML = '';
-          typeBadgeEl.style.display = 'none';
-          networkBadgeEl.style.display = 'none';
-          currentRequestId = null;
-          pendingRequest = null;
-          startPollingAfterDone();
-        }
-      } catch (e) {
-        // network error, ignore — heartbeat will handle disconnect
-      }
-    }, 1500);
+  function clearActiveUI() {
+    detailsEl.innerHTML = '';
+    typeBadgeEl.style.display = 'none';
+    networkBadgeEl.style.display = 'none';
+    buttonGroup.style.display = 'none';
+    retryGroup.style.display = 'none';
   }
 
-  function stopValidityWatch() {
-    if (validityTimer) { clearInterval(validityTimer); validityTimer = null; }
+  // --- Tab bar ---
+
+  var SIGN_TX_TITLES = {
+    'Transfer TRX':            'Transfer TRX',
+    'Transfer TRC10 Asset':    'TRC10 Transfer',
+    'TRC20 Transfer':          'TRC20 Transfer',
+    'TRC721 Transfer (NFT)':   'NFT Transfer',
+    'Stake TRX (Freeze v2)':   'Stake TRX',
+    'Unstake TRX (Unfreeze v2)': 'Unstake TRX',
+    'Delegate Resource':       'Delegate',
+    'Undelegate Resource':     'Undelegate',
+    'Withdraw Unfrozen TRX':   'Withdraw',
+    'Vote for SR':             'Vote',
+    'Claim Rewards':           'Claim',
+    'Deploy Contract':         'Deploy',
+    'Create Account':          'Create Acct'
+  };
+
+  function getDetail(details, label) {
+    if (!details) return null;
+    for (var i = 0; i < details.length; i++) {
+      if (details[i].l === label) return details[i].v;
+    }
+    return null;
+  }
+
+  function amountArrow(amount, to) {
+    var parts = [];
+    if (amount && amount !== 'Loading...') parts.push(amount);
+    if (to) parts.push('→ ' + shortAddr(to));
+    return parts.join(' ');
+  }
+
+  function signTxLabel(tx, broadcast) {
+    var parsed = null;
+    try { parsed = window.TxParser.parseTransaction(tx); } catch (_) {}
+    if (!parsed) return { title: 'Sign Tx', summary: broadcast ? 'sign + broadcast' : 'sign only' };
+    var title = SIGN_TX_TITLES[parsed.label] || parsed.label || 'Sign Tx';
+    var to = getDetail(parsed.details, 'To') || getDetail(parsed.details, 'Receiver') || '';
+    var amount = getDetail(parsed.details, 'Amount') || '';
+    var summary = amountArrow(amount, to);
+    if (!summary) summary = broadcast ? 'sign + broadcast' : 'sign only';
+    return { title: title, summary: summary };
+  }
+
+  function tabLabel(req) {
+    var data = req.data || {};
+    switch (req.type) {
+      case 'connect':         return { title: 'Connect',    summary: 'Wallet connect' };
+      case 'send_trx':        return { title: 'Send TRX',   summary: amountArrow(data.amount != null ? data.amount + ' TRX' : '', data.to) };
+      case 'send_trc20':      return { title: 'Send TRC20', summary: amountArrow(data.amount != null ? String(data.amount) : '', data.to) };
+      case 'sign_message':    return { title: 'Sign Msg',   summary: truncate(String(data.message || ''), 24) };
+      case 'sign_typed_data': return { title: 'Typed Data', summary: 'EIP-712' };
+      case 'sign_transaction':return signTxLabel(data.transaction, data.broadcast);
+      default:                return { title: req.type,     summary: '' };
+    }
+  }
+
+  function shortAddr(a) {
+    if (!a || typeof a !== 'string' || a.length < 10) return String(a || '');
+    return a.slice(0, 5) + '…' + a.slice(-4);
+  }
+
+  function truncate(s, n) {
+    return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
+  function renderTabBar() {
+    tabBarEl.innerHTML = '';
+    var sorted = Object.keys(pendingRequests)
+      .map(function(k) { return pendingRequests[k]; })
+      .sort(function(a, b) { return a.createdAt - b.createdAt; });
+    if (sorted.length <= 1) return; // don't show tab bar for single or zero
+    sorted.forEach(function(r) {
+      var label = tabLabel(r);
+      var tab = document.createElement('div');
+      tab.className = 'tab' + (r.id === currentRequestId ? ' active' : '');
+      tab.innerHTML =
+        '<div class="tab-title">' + escapeHtml(label.title) + '</div>' +
+        '<div class="tab-summary">' + escapeHtml(label.summary) + '</div>';
+      tab.addEventListener('click', function() { switchTo(r.id); });
+      tabBarEl.appendChild(tab);
+    });
+  }
+
+  function switchTo(id) {
+    if (id === currentRequestId) return;
+    var req = pendingRequests[id];
+    if (!req) return;
+    console.error('[switchTo]', { id: id, type: req.type, network: req.network });
+    currentRequestId = id;
+    pendingRequest = req;
+    approveBtn.disabled = false;
+    rejectBtn.disabled = false;
+    buttonGroup.style.display = 'none';
+    retryGroup.style.display = 'none';
+    renderTabBar();
+    handleRequest(req);
   }
 
   // --- Render request details ---
@@ -159,20 +232,31 @@
         if (parsed) {
           addDetail('Type', parsed.label);
           parsed.details.forEach(function(d) { addDetail(d.l, d.v); });
-          if (parsed._trc10 && req.networkConfig) {
-            window.TxParser.fetchTrc10Info(parsed._trc10, detailsEl, req.networkConfig.fullHost);
-          }
-          if (parsed._trc20) {
-            window.TxParser.fetchTrc20Info(parsed._trc20, detailsEl);
-          }
-          if (parsed._withdrawOwner) {
-            window.TxParser.fetchWithdrawAmount(parsed._withdrawOwner, detailsEl);
-          }
         } else {
           addDetail('Transaction', JSON.stringify(data.transaction, null, 2));
         }
         break;
       }
+    }
+  }
+
+  // Async on-chain lookups (TRC10 precision, TRC20 decimals/symbol, unfrozen
+  // withdraw amount). Must run AFTER ensureWalletReady completes any network
+  // switch, otherwise they hit the wrong chain and fail silently.
+  function runAsyncLookups(req) {
+    if (!req || req.type !== 'sign_transaction') return;
+    var data = req.data || {};
+    var parsed;
+    try { parsed = window.TxParser.parseTransaction(data.transaction); } catch (_) { return; }
+    if (!parsed) return;
+    if (parsed._trc10 && req.networkConfig) {
+      window.TxParser.fetchTrc10Info(parsed._trc10, detailsEl, req.networkConfig.fullHost);
+    }
+    if (parsed._trc20) {
+      window.TxParser.fetchTrc20Info(parsed._trc20, detailsEl);
+    }
+    if (parsed._withdrawOwner) {
+      window.TxParser.fetchWithdrawAmount(parsed._withdrawOwner, detailsEl);
     }
   }
 
@@ -191,20 +275,20 @@
         for (var i = 0; i < 10; i++) {
           var addr = window.TronWallet.getAddress();
           if (addr) {
-            stopValidityWatch();
             try {
               await completeRequest(currentRequestId, true, { address: addr, network: window.TronWallet.getCurrentNetwork() });
               setStatus('Wallet connected: ' + addr, 'success');
+              lastResultAt = Date.now();
             } catch (_) {
               setStatus('Request expired or no longer available.', 'error');
             }
-            startPollingAfterDone();
             return;
           }
           await new Promise(function(r) { setTimeout(r, 300); });
         }
       }
 
+      runAsyncLookups(pendingRequest);
       setStatus('Ready. Review and approve or reject.', 'info');
       buttonGroup.style.display = 'flex';
     } catch (e) {
@@ -236,10 +320,7 @@
   async function handleRequest(req) {
     pendingRequest = req;
     currentRequestId = req.id;
-    startValidityWatch(req.id);
 
-    // Wait for wallet extension to inject first — tronWeb.address.fromHex
-    // (used by renderDetails to show base58 addresses) needs the provider.
     setStatus('Discovering wallets...', 'waiting');
     try {
       await window.TronWallet.waitForWallet(5000);
@@ -254,45 +335,45 @@
     }
 
     renderDetails(req);
-
     await tryEnsureWallet();
   }
 
-  // --- Polling ---
+  // --- List polling ---
 
-  async function pollForRequests() {
-    if (polling) return;
-    polling = true;
-    if (!currentRequestId) {
-      setStatus('Waiting for request...', 'info');
+  function syncPendingList(requests) {
+    var newMap = {};
+    requests.forEach(function(r) { newMap[r.id] = r; });
+    pendingRequests = newMap;
+
+    // Current request disappeared (completed/rejected/expired from server side)
+    if (currentRequestId && !pendingRequests[currentRequestId]) {
+      currentRequestId = null;
+      pendingRequest = null;
+      clearActiveUI();
+      if (requests.length === 0 && Date.now() - lastResultAt > 2000) {
+        setStatus('Waiting for request...', 'info');
+      }
     }
 
-    while (true) {
-      if (sessionExpired) { polling = false; return; }
-      try {
-        var res = await fetch('/api/pending/next');
-        if (res.ok) {
-          var req = await res.json();
-          if (req.id !== currentRequestId) {
-            buttonGroup.style.display = 'none';
-            retryGroup.style.display = 'none';
-            approveBtn.disabled = false;
-            rejectBtn.disabled = false;
-            polling = false;
-            await handleRequest(req);
-            return;
-          }
-        }
-      } catch (e) {
-        // network error, ignore
-      }
-      await new Promise(function(r) { setTimeout(r, 1000); });
+    renderTabBar();
+
+    // Idle with incoming requests: auto-select oldest
+    if (!currentRequestId && requests.length > 0) {
+      switchTo(requests[0].id);
     }
   }
 
-  function startPollingAfterDone() {
+  async function pollPending() {
+    if (polling || sessionExpired) return;
+    polling = true;
+    try {
+      var res = await fetch('/api/pending');
+      if (res.ok) {
+        var data = await res.json();
+        syncPendingList(data.requests || []);
+      }
+    } catch (_) { /* ignore transient error */ }
     polling = false;
-    pollForRequests();
   }
 
   // --- Event listeners ---
@@ -302,52 +383,73 @@
   });
 
   approveBtn.addEventListener('click', async function() {
+    if (!currentRequestId || !pendingRequest) return;
+    var id = currentRequestId;
+    var req = pendingRequest;
     disableButtons();
-    stopValidityWatch();
-    setStatus('Checking request...', 'waiting');
+    setStatus('Processing with wallet...', 'waiting');
     try {
-      var check = await fetch('/api/pending/' + currentRequestId);
-      if (!check.ok) {
-        throw new Error('Request was cancelled or expired.');
-      }
-      setStatus('Processing with wallet...', 'waiting');
-      var result = await window.TronActions.execute(pendingRequest);
-      await completeRequest(currentRequestId, true, result);
+      var result = await window.TronActions.execute(req);
+      await completeRequest(id, true, result);
       setStatus('Approved and completed successfully.', 'success');
     } catch (e) {
       var msg = e.message || String(e);
-      try {
-        await completeRequest(currentRequestId, false, msg);
-      } catch (_) {
-        // Request already expired, ignore
-      }
+      try { await completeRequest(id, false, msg); } catch (_) {}
       setStatus('Error: ' + msg, 'error');
     }
-    startPollingAfterDone();
+    lastResultAt = Date.now();
   });
 
   rejectBtn.addEventListener('click', async function() {
+    if (!currentRequestId) return;
+    var id = currentRequestId;
     disableButtons();
-    stopValidityWatch();
     try {
-      await completeRequest(currentRequestId, false, 'USER_REJECTED');
+      await completeRequest(id, false, 'USER_REJECTED');
       setStatus('Rejected.', 'error');
     } catch (_) {
       setStatus('Request expired or no longer available.', 'error');
     }
-    startPollingAfterDone();
+    lastResultAt = Date.now();
   });
+
+  // --- Wallet change handling ---
+
+  async function handleWalletChanged(reason) {
+    console.error('[handleWalletChanged] fired', reason);
+    try {
+      await fetch('/api/wallet-changed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId, reason: reason }),
+      });
+    } catch (_) { /* server will catch up on next poll */ }
+    pendingRequests = {};
+    currentRequestId = null;
+    pendingRequest = null;
+    clearActiveUI();
+    tabBarEl.innerHTML = '';
+    var label = reason === 'account' ? 'Account changed'
+              : reason === 'network' ? 'Network changed'
+              : reason === 'disconnect' ? 'Wallet disconnected'
+              : 'Wallet changed';
+    setStatus(label + '. Pending requests cleared.', 'info');
+    lastResultAt = Date.now();
+  }
+
+  window.TronWallet.setOnWalletChanged(handleWalletChanged);
 
   // --- Init ---
   window.TronWallet.discoverWallets();
-  // Fetch session ID before starting, then poll
   fetch('/api/session').then(function(res) {
     return res.json();
   }).then(function(data) {
     sessionId = data.sessionId;
-    pollForRequests();
+    setStatus('Waiting for request...', 'info');
+    setInterval(pollPending, 1000);
+    pollPending();
   }).catch(function() {
-    // Server might not be ready yet, start polling anyway
-    pollForRequests();
+    setInterval(pollPending, 1000);
+    pollPending();
   });
 })();

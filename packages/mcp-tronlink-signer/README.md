@@ -82,6 +82,10 @@ All tools support an optional `network` parameter (`mainnet` / `nile` / `shasta`
 
 All signing tools support MCP cancellation. If the AI client cancels a pending tool call (e.g., user presses Ctrl+C in Claude Code), the in-flight request is automatically aborted and the browser approval page is not opened for already-cancelled requests.
 
+## Transaction Confirmation
+
+When `sign_transaction` is called with `broadcast: true`, the server automatically polls for on-chain confirmation after broadcast and returns the execution status (`success` or `pending`). If the transaction fails on-chain (e.g., `OUT_OF_ENERGY`, Solidity revert), the error is returned to the AI agent with a decoded reason.
+
 ## Environment Variables
 
 | Variable | Description | Default |
