@@ -179,10 +179,12 @@
   // --- Wallet readiness ---
 
   async function tryEnsureWallet() {
+    if (!pendingRequest) return;
     retryGroup.style.display = 'none';
     buttonGroup.style.display = 'none';
     try {
       await window.TronWallet.ensureWalletReady(pendingRequest.network, setStatus);
+      if (!pendingRequest) return;
 
       // Auto-complete connect requests once wallet is ready
       if (pendingRequest.type === 'connect') {
