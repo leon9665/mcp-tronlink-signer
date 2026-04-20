@@ -28,7 +28,19 @@
   }
 
   function fromSun(sun) {
-    return (Number(sun) / 1e6) + ' TRX';
+    if (sun === undefined || sun === null || sun === '') return '0 TRX';
+    var raw;
+    try { raw = BigInt(sun); } catch(e) { return String(sun) + ' TRX'; }
+    var neg = raw < 0n;
+    if (neg) raw = -raw;
+    var whole = raw / 1000000n;
+    var frac = raw % 1000000n;
+    var out = whole.toString();
+    if (frac > 0n) {
+      var fracStr = frac.toString().padStart(6, '0').replace(/0+$/, '');
+      if (fracStr) out += '.' + fracStr;
+    }
+    return (neg ? '-' : '') + out + ' TRX';
   }
 
   function parseTransaction(tx) {

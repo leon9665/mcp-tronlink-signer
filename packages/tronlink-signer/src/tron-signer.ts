@@ -4,7 +4,7 @@ import { PendingStore } from "./pending-store.js";
 import { HttpServer } from "./http-server.js";
 import { openApprovalPage, getLastHeartbeat } from "./browser.js";
 import { NETWORKS, loadConfig } from "./config.js";
-import type { AppConfig, TronNetwork, SendTrxData, SendTrc20Data, SignMessageData, SignTypedDataData, SignTransactionData, SignerOptions, WaitForTransactionOptions } from "./types.js";
+import type { AppConfig, TronNetwork, SendTrxData, SendTrc20Data, SignMessageData, SignTypedDataData, SignTransactionData, SignerOptions, WaitForTransactionOptions, BroadcastResult, BroadcastStatus } from "./types.js";
 // @ts-ignore - HTML imported as text via tsup loader
 import htmlContent from "./web/index.html";
 // @ts-ignore - JS imported as text via tsup loader
@@ -26,6 +26,7 @@ export class TronSigner {
   private _onBrowserDisconnect: (() => void) | null = null;
   private _onWalletChanged: ((reason: string) => void) | null = null;
   private connectedWallet: { address: string; network: TronNetwork } | null = null;
+  private broadcastListeners = new Map<string, (info: { txId: string; signedTransaction?: Record<string, unknown> }) => void>();
 
   set onBrowserDisconnect(cb: (() => void) | null) {
     this._onBrowserDisconnect = cb;
@@ -65,6 +66,30 @@ export class TronSigner {
       this.connectedWallet = null;
       if (this._onWalletChanged) this._onWalletChanged(reason);
     };
+    this.httpServer.onBroadcasted = (id, info) => {
+      const listener = this.broadcastListeners.get(id);
+      if (listener) listener(info);
+    };
+  }
+
+  /** Register a listener that fires the moment the browser reports a successful broadcast
+   *  (before on-chain confirmation). Auto-removed when `promise` settles. */
+  private registerBroadcastListener(
+    id: string,
+    promise: Promise<unknown>,
+    onBroadcasted: (info: { txId: string; signedTransaction: Record<string, unknown> }) => void
+  ): void {
+    let fired = false;
+    this.broadcastListeners.set(id, (info) => {
+      if (fired) return;
+      fired = true;
+      try {
+        onBroadcasted({ txId: info.txId, signedTransaction: info.signedTransaction ?? {} });
+      } catch {
+        /* caller's problem */
+      }
+    });
+    promise.finally(() => this.broadcastListeners.delete(id));
   }
 
   async start(): Promise<void> {
@@ -107,6 +132,24 @@ export class TronSigner {
     return network || this.config.network;
   }
 
+  // Browser only broadcasts and returns { txId, status: 'pending' }. The SDK
+  // runs the confirmation poll here so we can use the server-side tronWeb
+  // (with TRON-PRO-API-KEY) and so confirmTimeoutMs isn't capped by the
+  // pending-store's 5-minute total timeout.
+  private async confirmIfNeeded(
+    broadcasted: BroadcastResult,
+    network: TronNetwork,
+    options?: SignerOptions,
+  ): Promise<BroadcastResult> {
+    if (options?.confirm === false) return broadcasted;
+    if (broadcasted.status !== "pending") return broadcasted;
+    const outcome = await this.waitForTransaction(broadcasted.txId, network, {
+      timeoutMs: options?.confirmTimeoutMs,
+      signal: options?.signal,
+    });
+    return { txId: broadcasted.txId, status: outcome.status, error: outcome.error };
+  }
+
   /** @returns true if the signal was already aborted */
   private attachAbortSignal(id: string, promise: Promise<unknown>, signal?: AbortSignal): boolean {
     if (!signal) return false;
@@ -143,16 +186,17 @@ export class TronSigner {
     return this.connectedWallet;
   }
 
-  async sendTrx(to: string, amount: string | number, network?: TronNetwork, options?: SignerOptions): Promise<{ txId: string }> {
+  async sendTrx(to: string, amount: string | number, network?: TronNetwork, options?: SignerOptions): Promise<BroadcastResult> {
     const net = this.resolveNetwork(network);
     const data: SendTrxData = { to, amount };
     const { id, promise } = this.pendingStore.create("send_trx", data, net);
     const cancelled = this.attachAbortSignal(id, promise, options?.signal);
+    if (options?.onBroadcasted) this.registerBroadcastListener(id, promise, options.onBroadcasted);
     if (!cancelled) {
       await openApprovalPage(this.getPort(), id);
     }
-    const result = (await promise) as { txId: string };
-    return result;
+    const broadcasted = (await promise) as BroadcastResult;
+    return this.confirmIfNeeded(broadcasted, net, options);
   }
 
   async sendTrc20(
@@ -162,7 +206,7 @@ export class TronSigner {
     decimals?: number,
     network?: TronNetwork,
     options?: SignerOptions
-  ): Promise<{ txId: string }> {
+  ): Promise<BroadcastResult> {
     const net = this.resolveNetwork(network);
     const data: SendTrc20Data = {
       contractAddress,
@@ -172,11 +216,12 @@ export class TronSigner {
     };
     const { id, promise } = this.pendingStore.create("send_trc20", data, net);
     const cancelled = this.attachAbortSignal(id, promise, options?.signal);
+    if (options?.onBroadcasted) this.registerBroadcastListener(id, promise, options.onBroadcasted);
     if (!cancelled) {
       await openApprovalPage(this.getPort(), id);
     }
-    const result = (await promise) as { txId: string };
-    return result;
+    const broadcasted = (await promise) as BroadcastResult;
+    return this.confirmIfNeeded(broadcasted, net, options);
   }
 
   async signMessage(message: string, network?: TronNetwork, options?: SignerOptions): Promise<{ signature: string }> {
@@ -212,29 +257,31 @@ export class TronSigner {
     network?: TronNetwork,
     broadcast?: boolean,
     options?: SignerOptions
-  ): Promise<{ signedTransaction: Record<string, unknown>; txId?: string; status?: "success" | "pending" }> {
+  ): Promise<{ signedTransaction: Record<string, unknown>; txId?: string; status?: BroadcastStatus; error?: string }> {
     const net = this.resolveNetwork(network);
-    const data: SignTransactionData = { transaction, broadcast: broadcast ?? false };
+    const data: SignTransactionData = {
+      transaction,
+      broadcast: broadcast ?? false,
+    };
     const { id, promise } = this.pendingStore.create("sign_transaction", data, net);
     const cancelled = this.attachAbortSignal(id, promise, options?.signal);
+    if (broadcast && options?.onBroadcasted) this.registerBroadcastListener(id, promise, options.onBroadcasted);
     if (!cancelled) {
       await openApprovalPage(this.getPort(), id);
     }
-    const result = (await promise) as { signedTransaction: Record<string, unknown>; txId?: string };
-    if (broadcast && result.txId) {
-      if (options?.onBroadcasted) {
-        try { options.onBroadcasted({ txId: result.txId, signedTransaction: result.signedTransaction }); }
-        catch { /* callback errors are the caller's problem, don't break the flow */ }
-      }
-      if (options?.confirm !== false) {
-        const status = await this.waitForTransaction(result.txId, net, {
-          timeoutMs: options?.confirmTimeoutMs,
-          signal: options?.signal,
-        });
-        return { ...result, status };
-      }
-    }
-    return result;
+    const result = (await promise) as {
+      signedTransaction: Record<string, unknown>;
+      txId?: string;
+      status?: BroadcastStatus;
+      error?: string;
+    };
+    if (!broadcast || !result.txId || !result.status) return result;
+    const confirmed = await this.confirmIfNeeded(
+      { txId: result.txId, status: result.status, error: result.error },
+      net,
+      options,
+    );
+    return { signedTransaction: result.signedTransaction, ...confirmed };
   }
 
   async getBalance(address: string, network?: TronNetwork): Promise<{ balance: string; balanceSun: number }> {
@@ -261,7 +308,7 @@ export class TronSigner {
     txId: string,
     network?: TronNetwork,
     options?: WaitForTransactionOptions
-  ): Promise<"success" | "pending"> {
+  ): Promise<{ status: BroadcastStatus; error?: string }> {
     const net = this.resolveNetwork(network);
     const tw = this.getTronWebFor(net);
     const timeoutMs = options?.timeoutMs ?? 30_000;
@@ -285,30 +332,26 @@ export class TronSigner {
         continue;
       }
 
-      // Empty object = not yet on-chain, keep polling
       if (!info || !info.id) {
         await sleepAbortable(pollIntervalMs, signal);
         continue;
       }
 
-      // Top-level FAILED covers contract-call execution errors
       if (info.result === "FAILED") {
         const reason = decodeRevertReason(info.contractResult?.[0]) || info.receipt?.result || "FAILED";
-        throw new Error(`Execution failed: ${reason}`);
+        return { status: "failed", error: reason };
       }
 
-      // receipt.result present and not SUCCESS = VM failure (OUT_OF_ENERGY, REVERT, ...)
       const receiptResult = info.receipt?.result;
       if (receiptResult && receiptResult !== "SUCCESS") {
         const reason = decodeRevertReason(info.contractResult?.[0]) || receiptResult;
-        throw new Error(`Execution failed: ${reason}`);
+        return { status: "failed", error: reason };
       }
 
-      // TRX native transfer: no receipt.result field on success, only net_usage.
-      return "success";
+      return { status: "success" };
     }
 
-    return "pending";
+    return { status: "pending" };
   }
 }
 

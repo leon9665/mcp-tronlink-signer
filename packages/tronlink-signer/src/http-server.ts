@@ -21,6 +21,7 @@ export class HttpServer {
   private port: number = 0;
   private sessionId: string;
   public onWalletChanged: ((reason: string) => void) | null = null;
+  public onBroadcasted: ((id: string, info: { txId: string; signedTransaction?: Record<string, unknown> }) => void) | null = null;
 
   constructor(pendingStore: PendingStore, htmlContent: string, jsFiles: Record<string, string> = {}) {
     this.pendingStore = pendingStore;
@@ -151,6 +152,21 @@ export class HttpServer {
       if (!this.requireSession(req, res)) return;
       recordHeartbeat();
       res.json({ ok: true, sessionId: this.sessionId });
+    });
+
+    this.app.post("/api/broadcasted/:id", (req: Request, res: Response) => {
+      if (!this.requireSession(req, res)) return;
+      const id = req.params.id as string;
+      const txId = typeof req.body?.txId === "string" ? req.body.txId : null;
+      if (!txId) {
+        res.status(400).json({ error: "txId required" });
+        return;
+      }
+      const signedTransaction = req.body?.signedTransaction && typeof req.body.signedTransaction === "object"
+        ? (req.body.signedTransaction as Record<string, unknown>)
+        : undefined;
+      if (this.onBroadcasted) this.onBroadcasted(id, { txId, signedTransaction });
+      res.json({ ok: true });
     });
 
     this.app.post("/api/wallet-changed", (req: Request, res: Response) => {

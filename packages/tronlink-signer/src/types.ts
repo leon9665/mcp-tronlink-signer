@@ -22,8 +22,6 @@ export interface PendingRequest<T = unknown> {
   createdAt: number;
 }
 
-export interface ConnectData {}
-
 export interface SendTrxData {
   to: string;
   amount: string | number;
@@ -47,6 +45,15 @@ export interface SignTypedDataData {
 export interface SignTransactionData {
   transaction: Record<string, unknown>;
   broadcast?: boolean;
+}
+
+export type BroadcastStatus = "success" | "pending" | "failed";
+
+export interface BroadcastResult {
+  txId: string;
+  status: BroadcastStatus;
+  /** Failure reason when status === "failed". */
+  error?: string;
 }
 
 export interface AppConfig {

@@ -382,6 +382,11 @@
     tryEnsureWallet();
   });
 
+  function shortTx(id) {
+    if (!id || typeof id !== 'string') return '';
+    return id.length > 14 ? id.slice(0, 8) + '…' + id.slice(-6) : id;
+  }
+
   approveBtn.addEventListener('click', async function() {
     if (!currentRequestId || !pendingRequest) return;
     var id = currentRequestId;
@@ -389,9 +394,34 @@
     disableButtons();
     setStatus('Processing with wallet...', 'waiting');
     try {
-      var result = await window.TronActions.execute(req);
+      var result = await window.TronActions.execute(req, {
+        onBroadcast: async function(info) {
+          setStatus('Broadcast sent (' + shortTx(info.txId) + '). Waiting for on-chain confirmation…', 'waiting');
+          // Notify server so SDK caller's onBroadcasted fires immediately,
+          // before we block on chain confirmation. Best-effort: ignore errors.
+          try {
+            await fetch('/api/broadcasted/' + id, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId: sessionId,
+                txId: info.txId,
+                signedTransaction: info.signedTransaction,
+              }),
+            });
+          } catch (_) { /* don't block confirmation on this */ }
+        },
+      });
       await completeRequest(id, true, result);
-      setStatus('Approved and completed successfully.', 'success');
+      if (result && result.status === 'pending' && result.txId) {
+        // Browser hands off confirmation polling to the SDK side — txid is on the
+        // chain, the caller will surface success/failed/timeout.
+        setStatus('Broadcast sent (txid: ' + shortTx(result.txId) + '). Caller is awaiting on-chain confirmation.', 'success');
+      } else if (req.type === 'sign_message' || req.type === 'sign_typed_data' || req.type === 'sign_transaction') {
+        setStatus('Signed successfully. Result returned to caller.', 'success');
+      } else {
+        setStatus('Approved.', 'success');
+      }
     } catch (e) {
       var msg = e.message || String(e);
       try { await completeRequest(id, false, msg); } catch (_) {}

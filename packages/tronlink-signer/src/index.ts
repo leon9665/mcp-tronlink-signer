@@ -13,4 +13,6 @@ export type {
   SignTransactionData,
   SignerOptions,
   WaitForTransactionOptions,
+  BroadcastStatus,
+  BroadcastResult,
 } from "./types.js";
