@@ -43,6 +43,63 @@
     return (neg ? '-' : '') + out + ' TRX';
   }
 
+  function truncateMiddle(s, max) {
+    if (!s || s.length <= max) return s;
+    var head = Math.floor((max - 1) / 2);
+    var tail = max - 1 - head;
+    return s.slice(0, head) + '…' + s.slice(-tail);
+  }
+
+  function formatArg(type, value) {
+    try {
+      if (type === 'address') return fromHexAddress(value);
+      if (/^address\[/.test(type)) {
+        var addrs = (value || []).map(function(v) { return fromHexAddress(v); });
+        if (addrs.length > 3) return '[' + addrs.slice(0, 3).join(', ') + ', …(+' + (addrs.length - 3) + ' more)]';
+        return '[' + addrs.join(', ') + ']';
+      }
+      if (/^(u?int)(\d+)?$/.test(type)) return (typeof value === 'bigint' ? value : BigInt(value)).toString();
+      if (/^(u?int)(\d+)?\[/.test(type)) {
+        var nums = (value || []).map(function(v) { return (typeof v === 'bigint' ? v : BigInt(v)).toString(); });
+        if (nums.length > 3) return '[' + nums.slice(0, 3).join(', ') + ', …(+' + (nums.length - 3) + ' more)]';
+        return '[' + nums.join(', ') + ']';
+      }
+      if (type === 'bool') return value ? 'true' : 'false';
+      if (type === 'string') return truncateMiddle(String(value), 80);
+      if (/^bytes(\d+)?$/.test(type)) {
+        var hex = typeof value === 'string' ? value : String(value);
+        if (hex.indexOf('0x') !== 0) hex = '0x' + hex;
+        return truncateMiddle(hex, 80);
+      }
+      if (/\[/.test(type) || type.indexOf('tuple') === 0) {
+        try { return truncateMiddle(JSON.stringify(value), 80); } catch(_) { return String(value); }
+      }
+      return truncateMiddle(String(value), 80);
+    } catch(_) {
+      return String(value);
+    }
+  }
+
+  // Decode calldata args using tronWeb's ABI decoder.
+  // inputs: [{name, type}, ...]
+  // Returns [{name, type, display}] or null on failure.
+  function decodeCall(argsHex, inputs) {
+    if (!inputs || !inputs.length) return [];
+    try {
+      var tw = window.TronWallet.getTronWeb();
+      if (!tw || !tw.utils || !tw.utils.abi) return null;
+      var types = inputs.map(function(i) { return i.type; });
+      // tronWeb's decodeParams signature: (names, types, data, ignoreMethodHash)
+      var decoded = tw.utils.abi.decodeParams([], types, '0x' + argsHex, false);
+      return inputs.map(function(input, i) {
+        var v = decoded[i];
+        return { name: input.name || ('arg' + i), type: input.type, display: formatArg(input.type, v) };
+      });
+    } catch(_) {
+      return null;
+    }
+  }
+
   function parseTransaction(tx) {
     var contract = null;
     if (tx.raw_data && tx.raw_data.contract && tx.raw_data.contract[0]) {
