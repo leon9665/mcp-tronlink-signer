@@ -168,7 +168,7 @@
           }
         }
         var message = typedData.message;
-        var sig = await tronWeb.trx._signTypedData(domain, types, message, primaryType);
+        var sig = await tronWeb.trx._signTypedData(domain, types, message);
         return { signature: sig };
       }
       case 'sign_transaction': {
