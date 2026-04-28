@@ -286,7 +286,7 @@
         addDetail('Contract', data.contractAddress);
         addDetail('To', data.to);
         addDetail('Amount', data.amount);
-        addDetail('Decimals', data.decimals);
+        addDetail('Decimals', data.decimals !== undefined ? data.decimals : 'auto-detect from contract');
         break;
       case 'sign_message':
         addDetail('Message', data.message);
@@ -456,7 +456,16 @@
     if (polling || sessionExpired) return;
     polling = true;
     try {
-      var res = await fetch('/api/pending', { headers: sessionHeaders() });
+      // Triple defense against the stale-410 trap: a query-string cache-bust,
+      // fetch's `cache: 'no-store'`, and a `Cache-Control: no-cache` header.
+      // Server-side no-store on /api/* only protects responses going forward —
+      // browsers that already cached a 410 from a previous daemon will keep
+      // serving it from disk on the very first poll after restart, which is
+      // exactly when we need to discover the new sessionId. Belt + suspenders.
+      var res = await fetch('/api/pending?_=' + Date.now(), {
+        cache: 'no-store',
+        headers: sessionHeaders({ 'Cache-Control': 'no-cache' })
+      });
       if (res.status === 410) {
         attemptReloadOrExpire();
       } else if (res.ok) {

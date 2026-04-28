@@ -85,6 +85,17 @@ export class HttpServer {
     this.app.use(express.json());
     this.app.use(this.originGuard);
 
+    // Browsers will cache 410 Gone (Session expired) by default per RFC 7234,
+    // which traps the SPA into "Waiting..." after a daemon restart. The SPA
+    // also self-heals via attemptReloadOrExpire, but pinning every /api/* to
+    // no-store removes the underlying foot-gun so future routes don't have to
+    // remember to opt out.
+    this.app.use("/api", (_req: Request, res: Response, next: NextFunction) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0, private");
+      res.setHeader("Pragma", "no-cache");
+      next();
+    });
+
     this.app.get("/", (_req: Request, res: Response) => {
       res.setHeader("Content-Type", "text/html");
       res.setHeader("Content-Security-Policy", CSP);

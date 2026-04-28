@@ -66,7 +66,7 @@ Sends TRC20 tokens. Opens a browser approval page. Returns `{ txId, status, erro
 | `contractAddress` | `string` | TRC20 token contract address |
 | `to` | `string` | Recipient Tron address (base58) |
 | `amount` | `string` | Amount in human-readable units (e.g., `"1.5"` for 1.5 USDT). Decimals conversion is automatic. |
-| `decimals` | `number` | Token decimals (default: 6) |
+| `decimals` | `number` | Optional. Token decimals. Omit to auto-detect via the contract's `decimals()` view (recommended — avoids 10^N magnitude errors on non-6dp tokens like USDD/SUN/JST). |
 | `network` | `TronNetwork` | Optional network override |
 | `options` | `SignerOptions` | Optional — pass `{ signal }` to enable cancellation |
 

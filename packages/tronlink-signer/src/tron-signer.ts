@@ -237,7 +237,7 @@ export class TronSigner {
       contractAddress,
       to,
       amount,
-      decimals: decimals ?? 6,
+      decimals,
     };
     const { id, promise } = this.pendingStore.create("send_trc20", data, net);
     const cancelled = this.attachAbortSignal(id, promise, options?.signal);

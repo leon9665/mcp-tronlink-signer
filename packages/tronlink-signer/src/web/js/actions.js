@@ -72,7 +72,30 @@
         return await broadcastOnly(tronWeb, signedTx, callbacks);
       }
       case 'send_trc20': {
-        var decimals = (data.decimals !== undefined && data.decimals !== null) ? data.decimals : 6;
+        // Caller-provided decimals win. When omitted, query the contract's
+        // decimals() view — falling back to a hardcoded default would silently
+        // misencode 18dp tokens (USDD/SUN/JST) by 10^12. Better to surface a
+        // clear error than to send the wrong amount.
+        var decimals;
+        if (data.decimals !== undefined && data.decimals !== null) {
+          decimals = data.decimals;
+        } else {
+          var decResult = await tronWeb.transactionBuilder.triggerConstantContract(
+            data.contractAddress,
+            'decimals()',
+            {},
+            [],
+            tronWeb.defaultAddress.base58
+          );
+          var decHex = decResult && decResult.constant_result && decResult.constant_result[0];
+          if (!decHex) {
+            throw new Error('Could not auto-detect token decimals (contract did not return decimals()). Pass `decimals` explicitly.');
+          }
+          decimals = parseInt(decHex, 16);
+          if (!Number.isFinite(decimals) || decimals < 0 || decimals > 18) {
+            throw new Error('Auto-detected decimals out of range (got ' + decHex + '). Pass `decimals` explicitly.');
+          }
+        }
         var amountStr = String(data.amount).trim();
         if (!/^\d+(\.\d+)?$/.test(amountStr)) {
           throw new Error('Invalid amount format: ' + data.amount);
@@ -117,12 +140,35 @@
         return { signature: signature };
       }
       case 'sign_typed_data': {
-        var typedData = data.typedData;
-        var domain = typedData.domain;
+        var typedData = data.typedData || {};
+        var primaryType = typedData.primaryType;
+        if (!primaryType || typeof primaryType !== 'string') {
+          throw new Error('typedData.primaryType is required');
+        }
+        var domain = typedData.domain || {};
         var types = Object.assign({}, typedData.types);
         delete types.EIP712Domain;
+        if (!types[primaryType]) {
+          throw new Error('primaryType "' + primaryType + '" not found in typedData.types');
+        }
+        // Defense-in-depth: TronLink's _signTypedData enforces chainId at runtime
+        // ("Provided chainId X must match active chainId Y"). Validating here too
+        // keeps us safe if a future TronLink build relaxes that check, and gives
+        // the caller a clearer error before the wallet round-trip.
+        var TRON_CHAIN_IDS = { mainnet: 728126428, nile: 3448148188, shasta: 2494104990 };
+        var currentNetwork = window.TronWallet.getCurrentNetwork();
+        var expectedChainId = TRON_CHAIN_IDS[currentNetwork];
+        if (domain.chainId !== undefined && domain.chainId !== null && expectedChainId) {
+          var claimed = Number(domain.chainId);
+          if (Number.isFinite(claimed) && claimed !== expectedChainId) {
+            throw new Error(
+              'chainId mismatch: typedData claims ' + domain.chainId +
+              ', wallet is on ' + currentNetwork + ' (chainId ' + expectedChainId + ')'
+            );
+          }
+        }
         var message = typedData.message;
-        var sig = await tronWeb.trx._signTypedData(domain, types, message);
+        var sig = await tronWeb.trx._signTypedData(domain, types, message, primaryType);
         return { signature: sig };
       }
       case 'sign_transaction': {

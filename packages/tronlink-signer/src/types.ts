@@ -31,7 +31,9 @@ export interface SendTrc20Data {
   contractAddress: string;
   to: string;
   amount: string;
-  decimals: number;
+  // Omitted → SPA auto-detects via the contract's decimals() view. A hardcoded
+  // fallback would silently misencode 18dp tokens (USDD/SUN/JST) by 10^12.
+  decimals?: number;
 }
 
 export interface SignMessageData {
