@@ -30,8 +30,7 @@ export const SendTrc20Schema = z.object({
     .min(0)
     .max(18)
     .optional()
-    .default(6)
-    .describe("Token decimals (default: 6, e.g. USDT)"),
+    .describe("Token decimals. Omit to auto-detect via the contract's decimals() view — required to avoid 10^N magnitude errors on non-6dp tokens (USDD/SUN/JST = 18dp)."),
   network: NetworkSchema,
 });
 

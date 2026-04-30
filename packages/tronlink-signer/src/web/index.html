@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="session-id" content="{{SESSION_ID}}">
 <title>TronLink Signer</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -153,9 +154,9 @@
     <button class="btn-reject" id="rejectBtn">Reject</button>
   </div>
 </div>
-<script src="/js/wallet.js"></script>
-<script src="/js/tx-parser.js"></script>
-<script src="/js/actions.js"></script>
-<script src="/js/app.js"></script>
+<script src="/js/wallet.js?v={{SESSION_ID}}"></script>
+<script src="/js/tx-parser.js?v={{SESSION_ID}}"></script>
+<script src="/js/actions.js?v={{SESSION_ID}}"></script>
+<script src="/js/app.js?v={{SESSION_ID}}"></script>
 </body>
 </html>

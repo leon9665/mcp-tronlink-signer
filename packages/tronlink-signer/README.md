@@ -17,8 +17,8 @@ const signer = new TronSigner();
 await signer.start();
 
 const { address, network } = await signer.connectWallet();
-const { txId } = await signer.sendTrx("TXxx...", 1);
-const { txId: txId2, status } = await signer.signTransaction(tx, "nile", true); // broadcast + auto-confirm
+const { txId, status } = await signer.sendTrx("TXxx...", 1); // status: "success" | "pending" | "failed"
+const { txId: txId2, status: s2 } = await signer.signTransaction(tx, "nile", true); // broadcast + auto-confirm
 const { balance } = await signer.getBalance("TXxx...");
 
 await signer.stop();
@@ -46,9 +46,9 @@ Returns the current configuration.
 
 Opens the browser to connect TronLink and retrieve the wallet address and current network. If the wallet is already connected (same browser tab still open), auto-completes without user interaction.
 
-### `signer.sendTrx(to, amount, network?, options?): Promise<{ txId: string }>`
+### `signer.sendTrx(to, amount, network?, options?): Promise<BroadcastResult>`
 
-Sends TRX to a recipient address. Opens a browser approval page for the user to confirm.
+Sends TRX to a recipient address. Opens a browser approval page for the user to confirm. Returns `{ txId, status, error? }` where `status` is `"success"`, `"pending"`, or `"failed"` (see [Broadcast Result](#broadcast-result)).
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
@@ -57,16 +57,16 @@ Sends TRX to a recipient address. Opens a browser approval page for the user to 
 | `network` | `TronNetwork` | Optional network override |
 | `options` | `SignerOptions` | Optional — pass `{ signal }` to enable cancellation |
 
-### `signer.sendTrc20(contractAddress, to, amount, decimals?, network?, options?): Promise<{ txId: string }>`
+### `signer.sendTrc20(contractAddress, to, amount, decimals?, network?, options?): Promise<BroadcastResult>`
 
-Sends TRC20 tokens. Opens a browser approval page.
+Sends TRC20 tokens. Opens a browser approval page. Returns `{ txId, status, error? }` — see [Broadcast Result](#broadcast-result).
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
 | `contractAddress` | `string` | TRC20 token contract address |
 | `to` | `string` | Recipient Tron address (base58) |
 | `amount` | `string` | Amount in human-readable units (e.g., `"1.5"` for 1.5 USDT). Decimals conversion is automatic. |
-| `decimals` | `number` | Token decimals (default: 6) |
+| `decimals` | `number` | Optional. Token decimals. Omit to auto-detect via the contract's `decimals()` view (recommended — avoids 10^N magnitude errors on non-6dp tokens like USDD/SUN/JST). |
 | `network` | `TronNetwork` | Optional network override |
 | `options` | `SignerOptions` | Optional — pass `{ signal }` to enable cancellation |
 
@@ -89,9 +89,9 @@ const { signature } = await signer.signTypedData({
 });
 ```
 
-### `signer.signTransaction(transaction, network?, broadcast?, options?): Promise<{ signedTransaction; txId?; status? }>`
+### `signer.signTransaction(transaction, network?, broadcast?, options?): Promise<{ signedTransaction; txId?; status?; error? }>`
 
-Signs a raw transaction. When `broadcast` is `true`, the signed transaction is broadcast on-chain via TronLink and the SDK automatically polls for on-chain confirmation (returns `status: "success"` or `"pending"`).
+Signs a raw transaction. When `broadcast` is `true`, the signed transaction is broadcast on-chain via TronLink and the SDK automatically polls for on-chain confirmation — see [Broadcast Result](#broadcast-result) for the possible `status` values.
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
@@ -105,9 +105,10 @@ Signs a raw transaction. When `broadcast` is `true`, the signed transaction is b
 const { signedTransaction } = await signer.signTransaction(tx);
 
 // Sign, broadcast, and wait for confirmation (default)
-const { signedTransaction, txId, status } = await signer.signTransaction(tx, "nile", true);
+const { signedTransaction, txId, status, error } = await signer.signTransaction(tx, "nile", true);
 // status === "success" — confirmed on-chain
 // status === "pending" — broadcast succeeded but not confirmed within timeout
+// status === "failed"  — on-chain execution failed; `error` carries the reason
 
 // Broadcast without waiting for confirmation
 const result = await signer.signTransaction(tx, "nile", true, { confirm: false });
@@ -118,9 +119,23 @@ const result = await signer.signTransaction(tx, "nile", true, {
 });
 ```
 
-### `signer.waitForTransaction(txId, network?, options?): Promise<"success" | "pending">`
+### Broadcast Result
 
-Polls the network for transaction confirmation. Returns `"success"` when the transaction is confirmed on-chain, or `"pending"` if the timeout is reached. Throws if the transaction execution failed (e.g., `OUT_OF_ENERGY`, Solidity revert).
+Broadcasting methods (`sendTrx`, `sendTrc20`, and `signTransaction` with `broadcast: true`) return a `BroadcastResult`:
+
+```ts
+interface BroadcastResult {
+  txId: string;
+  status: "success" | "pending" | "failed";
+  error?: string; // set when status === "failed"
+}
+```
+
+`"failed"` means the transaction reached the chain but execution failed (e.g. `OUT_OF_ENERGY`, Solidity revert). **It is not thrown** — inspect `status` instead. The SDK only throws when broadcast itself never happened (signature error, user rejection, network unreachable, etc.).
+
+### `signer.waitForTransaction(txId, network?, options?): Promise<{ status; error? }>`
+
+Polls the network for transaction confirmation. Returns `{ status: "success" }` when confirmed, `{ status: "pending" }` on timeout, or `{ status: "failed", error }` when the transaction reverted / ran out of energy.
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
@@ -129,10 +144,9 @@ Polls the network for transaction confirmation. Returns `"success"` when the tra
 | `options` | `WaitForTransactionOptions` | Optional — `timeoutMs` (default: 30000), `signal` |
 
 ```ts
-const status = await signer.waitForTransaction(txId, "nile");
-if (status === "success") {
-  console.log("Confirmed on-chain");
-}
+const { status, error } = await signer.waitForTransaction(txId, "nile");
+if (status === "success") console.log("Confirmed on-chain");
+else if (status === "failed") console.warn("Execution failed:", error);
 ```
 
 > **Note:** When using `signTransaction` with `broadcast: true`, confirmation polling is automatic — you don't need to call `waitForTransaction` separately unless you set `confirm: false`.
@@ -237,6 +251,14 @@ interface WaitForTransactionOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
 }
+
+type BroadcastStatus = "success" | "pending" | "failed";
+
+interface BroadcastResult {
+  txId: string;
+  status: BroadcastStatus;
+  error?: string;
+}
 ```
 
 ## Exports
@@ -252,9 +274,10 @@ export { NETWORKS, DEFAULT_HTTP_PORT, REQUEST_TIMEOUT_MS, loadConfig } from "./c
 export type {
   TronNetwork, NetworkConfig, AppConfig,
   PendingRequestType, PendingRequest,
-  ConnectData, SendTrxData, SendTrc20Data,
+  SendTrxData, SendTrc20Data,
   SignMessageData, SignTypedDataData, SignTransactionData,
   SignerOptions, WaitForTransactionOptions,
+  BroadcastStatus, BroadcastResult,
 } from "./types.js";
 ```
 

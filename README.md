@@ -54,9 +54,9 @@ await signer.start();
 // First operation opens a browser tab; subsequent ones reuse it.
 const { address, network } = await signer.connectWallet();
 const { signature } = await signer.signMessage("hello world");
-const { txId } = await signer.sendTrx("TXxx...", 1);
+const { txId, status, error } = await signer.sendTrx("TXxx...", 1); // status: "success" | "pending" | "failed"
 const { signedTransaction } = await signer.signTransaction(tx); // Sign only
-const { txId: broadcastTxId, status } = await signer.signTransaction(tx, "nile", true); // Sign + broadcast + confirm
+const { txId: broadcastTxId, status: broadcastStatus } = await signer.signTransaction(tx, "nile", true); // Sign + broadcast + confirm
 const { balance } = await signer.getBalance("TXxx..."); // No browser needed
 
 // All signing methods support AbortSignal for cancellation
@@ -64,7 +64,7 @@ const ac = new AbortController();
 const { txId: t } = await signer.sendTrx("TXxx...", 1, undefined, { signal: ac.signal });
 
 // Wait for an existing transaction to confirm
-const result = await signer.waitForTransaction(broadcastTxId, "nile"); // "success" | "pending"
+const result = await signer.waitForTransaction(broadcastTxId, "nile"); // { status, error? }
 
 await signer.stop();
 ```
@@ -103,7 +103,7 @@ All subsequent operations reuse the same browser tab. Each server session has a 
 
 ```bash
 pnpm install
-pnpm build        # Build all packages
+pnpm build        # Build all packages (run this before typecheck — mcp-tronlink-signer imports the built tronlink-signer types)
 pnpm typecheck    # Type check all packages
 ```
 

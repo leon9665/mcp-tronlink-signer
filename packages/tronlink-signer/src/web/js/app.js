@@ -15,8 +15,20 @@
   var pendingRequest = null;  // currently active request object
   var currentRequestId = null;
   var polling = false;
-  var sessionId = null;
+  // sessionId is injected into the HTML by the server (per-pageload). It never
+  // travels in a response body — any local process that could read it over HTTP
+  // would be able to forge approvals.
+  var sessionMeta = document.querySelector('meta[name="session-id"]');
+  var sessionId = sessionMeta ? sessionMeta.getAttribute('content') : null;
   var lastResultAt = 0;       // suppress idle status overwrite right after approve/reject
+
+  function sessionHeaders(extra) {
+    var h = { 'x-session-id': sessionId || '' };
+    if (extra) {
+      for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) h[k] = extra[k];
+    }
+    return h;
+  }
 
   var NETWORK_NAMES = {
     mainnet: 'Mainnet',
@@ -27,6 +39,8 @@
   // Heartbeat — detect server disconnect or session change
   var heartbeatFailCount = 0;
   var sessionExpired = false;
+  var RELOAD_KEY = 'tronlink-signer:lastReloadAt';
+  var RELOAD_COOLDOWN_MS = 10_000;
 
   function markSessionExpired() {
     sessionExpired = true;
@@ -37,27 +51,82 @@
     rejectBtn.disabled = true;
     tabBarEl.innerHTML = '';
   }
-  setInterval(function() {
+
+  // 410 (sessionId mismatch — daemon restarted) or repeated heartbeat failures
+  // route here. Try in-place refresh first: fetch '/' with cache:'no-store',
+  // parse the new sessionId out of the meta tag, swap it in memory. This keeps
+  // the current tab (preserving the single-window-per-instance invariant and
+  // the in-progress UI: tabBar, pending request, wallet popup state).
+  //
+  // Only fall back to location.reload() when the in-place fetch fails (network
+  // truly down). Reload is throttled by RELOAD_COOLDOWN_MS in sessionStorage —
+  // two reloads within the window means the previous one didn't help, so we go
+  // terminal instead of thrashing.
+  async function attemptReloadOrExpire() {
+    if (sessionExpired) return;
+
+    try {
+      var res = await fetch('/?_=' + Date.now(), {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+      if (res.ok) {
+        var html = await res.text();
+        var m = html.match(/<meta name="session-id" content="([^"]+)">/);
+        var newId = m && m[1];
+        if (newId && newId !== '{{SESSION_ID}}') {
+          if (newId !== sessionId) {
+            sessionId = newId;
+            var meta = document.querySelector('meta[name="session-id"]');
+            if (meta) meta.setAttribute('content', newId);
+          }
+          heartbeatFailCount = 0;
+          try { sessionStorage.removeItem(RELOAD_KEY); } catch (_) {}
+          return;
+        }
+      }
+    } catch (_) { /* fall through to reload */ }
+
+    var now = Date.now();
+    var lastReload = 0;
+    try { lastReload = parseInt(sessionStorage.getItem(RELOAD_KEY) || '0', 10) || 0; } catch (_) {}
+    if (lastReload && now - lastReload < RELOAD_COOLDOWN_MS) {
+      markSessionExpired();
+      return;
+    }
+    try { sessionStorage.setItem(RELOAD_KEY, String(now)); } catch (_) {}
+    location.reload();
+  }
+
+  function pulseHeartbeat() {
     if (sessionExpired) return;
     if (!sessionId) return;
     fetch('/api/heartbeat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sessionId })
+      headers: sessionHeaders({ 'Content-Type': 'application/json' }),
+      body: '{}'
     })
       .then(function(res) {
         if (res.status === 410) {
-          markSessionExpired();
+          attemptReloadOrExpire();
           return;
         }
-        if (res.ok) heartbeatFailCount = 0;
+        if (res.ok) {
+          heartbeatFailCount = 0;
+          try { sessionStorage.removeItem(RELOAD_KEY); } catch (_) {}
+        }
         else heartbeatFailCount++;
       })
       .catch(function() { heartbeatFailCount++; })
       .finally(function() {
-        if (heartbeatFailCount >= 3 && !sessionExpired) markSessionExpired();
+        if (heartbeatFailCount >= 3 && !sessionExpired) attemptReloadOrExpire();
       });
-  }, 1000);
+  }
+  // Fire immediately so the first heartbeat doesn't have to wait a full second
+  // — closes the gap with the SDK's watchTimer DISCONNECT_TIMEOUT during cold
+  // browser startup.
+  pulseHeartbeat();
+  setInterval(pulseHeartbeat, 1000);
 
   // --- UI helpers ---
 
@@ -72,9 +141,10 @@
     return d.innerHTML;
   }
 
-  function addDetail(label, value) {
+  function addDetail(label, value, rowKey) {
     var row = document.createElement('div');
     row.className = 'detail-row';
+    if (rowKey) row.setAttribute('data-row-key', rowKey);
     row.innerHTML = '<span class="label">' + label + '</span><span class="value">' + escapeHtml(String(value)) + '</span>';
     detailsEl.appendChild(row);
   }
@@ -216,7 +286,7 @@
         addDetail('Contract', data.contractAddress);
         addDetail('To', data.to);
         addDetail('Amount', data.amount);
-        addDetail('Decimals', data.decimals);
+        addDetail('Decimals', data.decimals !== undefined ? data.decimals : 'auto-detect from contract');
         break;
       case 'sign_message':
         addDetail('Message', data.message);
@@ -231,7 +301,7 @@
         var parsed = window.TxParser.parseTransaction(data.transaction);
         if (parsed) {
           addDetail('Type', parsed.label);
-          parsed.details.forEach(function(d) { addDetail(d.l, d.v); });
+          parsed.details.forEach(function(d) { addDetail(d.l, d.v, d.k); });
         } else {
           addDetail('Transaction', JSON.stringify(data.transaction, null, 2));
         }
@@ -243,20 +313,39 @@
   // Async on-chain lookups (TRC10 precision, TRC20 decimals/symbol, unfrozen
   // withdraw amount). Must run AFTER ensureWalletReady completes any network
   // switch, otherwise they hit the wrong chain and fail silently.
+  //
+  // detailsEl is shared across requests (cleared by renderDetails on switch),
+  // and the lookups locate target rows by label/key. Without a guard, a
+  // lookup fired for request A that resolves after the user switched to B
+  // would clobber B's matching row (e.g. write A's TRC20 "1.0 USDT" into B's
+  // "Amount" row that holds "10 TRX"). isStale snapshots the request id at
+  // dispatch time so each lookup can no-op on stale resolutions.
   function runAsyncLookups(req) {
     if (!req || req.type !== 'sign_transaction') return;
     var data = req.data || {};
     var parsed;
     try { parsed = window.TxParser.parseTransaction(data.transaction); } catch (_) { return; }
     if (!parsed) return;
+    var snapshotId = req.id;
+    var isStale = function() { return currentRequestId !== snapshotId; };
     if (parsed._trc10 && req.networkConfig) {
-      window.TxParser.fetchTrc10Info(parsed._trc10, detailsEl, req.networkConfig.fullHost);
+      window.TxParser.fetchTrc10Info(parsed._trc10, detailsEl, req.networkConfig.fullHost, isStale);
     }
     if (parsed._trc20) {
-      window.TxParser.fetchTrc20Info(parsed._trc20, detailsEl);
+      window.TxParser.fetchTrc20Info(parsed._trc20, detailsEl, isStale);
     }
     if (parsed._withdrawOwner) {
-      window.TxParser.fetchWithdrawAmount(parsed._withdrawOwner, detailsEl);
+      window.TxParser.fetchWithdrawAmount(parsed._withdrawOwner, detailsEl, isStale);
+    }
+    if (parsed._contractCall) {
+      var cc = parsed._contractCall;
+      if (cc.resolved) {
+        if (cc.tokenAmounts && cc.tokenAmounts.length) {
+          window.TxParser.fetchTrc20AmountForCall(cc, detailsEl, isStale);
+        }
+      } else {
+        window.TxParser.fetchContractCallAbi(cc, detailsEl, isStale);
+      }
     }
   }
 
@@ -301,15 +390,15 @@
 
   async function completeRequest(id, success, resultOrError) {
     var body = success
-      ? { sessionId: sessionId, success: true, result: resultOrError }
-      : { sessionId: sessionId, success: false, error: resultOrError };
+      ? { success: true, result: resultOrError }
+      : { success: false, error: resultOrError };
     var res = await fetch('/api/complete/' + id, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: sessionHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     if (res.status === 410) {
-      markSessionExpired();
+      attemptReloadOrExpire();
       throw new Error('Session expired.');
     }
     if (!res.ok) {
@@ -367,8 +456,19 @@
     if (polling || sessionExpired) return;
     polling = true;
     try {
-      var res = await fetch('/api/pending');
-      if (res.ok) {
+      // Triple defense against the stale-410 trap: a query-string cache-bust,
+      // fetch's `cache: 'no-store'`, and a `Cache-Control: no-cache` header.
+      // Server-side no-store on /api/* only protects responses going forward —
+      // browsers that already cached a 410 from a previous daemon will keep
+      // serving it from disk on the very first poll after restart, which is
+      // exactly when we need to discover the new sessionId. Belt + suspenders.
+      var res = await fetch('/api/pending?_=' + Date.now(), {
+        cache: 'no-store',
+        headers: sessionHeaders({ 'Cache-Control': 'no-cache' })
+      });
+      if (res.status === 410) {
+        attemptReloadOrExpire();
+      } else if (res.ok) {
         var data = await res.json();
         syncPendingList(data.requests || []);
       }
@@ -382,6 +482,11 @@
     tryEnsureWallet();
   });
 
+  function shortTx(id) {
+    if (!id || typeof id !== 'string') return '';
+    return id.length > 14 ? id.slice(0, 8) + '…' + id.slice(-6) : id;
+  }
+
   approveBtn.addEventListener('click', async function() {
     if (!currentRequestId || !pendingRequest) return;
     var id = currentRequestId;
@@ -389,9 +494,33 @@
     disableButtons();
     setStatus('Processing with wallet...', 'waiting');
     try {
-      var result = await window.TronActions.execute(req);
+      var result = await window.TronActions.execute(req, {
+        onBroadcast: async function(info) {
+          setStatus('Broadcast sent (' + shortTx(info.txId) + '). Waiting for on-chain confirmation…', 'waiting');
+          // Notify server so SDK caller's onBroadcasted fires immediately,
+          // before we block on chain confirmation. Best-effort: ignore errors.
+          try {
+            await fetch('/api/broadcasted/' + id, {
+              method: 'POST',
+              headers: sessionHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({
+                txId: info.txId,
+                signedTransaction: info.signedTransaction,
+              }),
+            });
+          } catch (_) { /* don't block confirmation on this */ }
+        },
+      });
       await completeRequest(id, true, result);
-      setStatus('Approved and completed successfully.', 'success');
+      if (result && result.status === 'pending' && result.txId) {
+        // Browser hands off confirmation polling to the SDK side — txid is on the
+        // chain, the caller will surface success/failed/timeout.
+        setStatus('Broadcast sent (txid: ' + shortTx(result.txId) + '). Caller is awaiting on-chain confirmation.', 'success');
+      } else if (req.type === 'sign_message' || req.type === 'sign_typed_data' || req.type === 'sign_transaction') {
+        setStatus('Signed successfully. Result returned to caller.', 'success');
+      } else {
+        setStatus('Approved.', 'success');
+      }
     } catch (e) {
       var msg = e.message || String(e);
       try { await completeRequest(id, false, msg); } catch (_) {}
@@ -420,8 +549,8 @@
     try {
       await fetch('/api/wallet-changed', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId, reason: reason }),
+        headers: sessionHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ reason: reason }),
       });
     } catch (_) { /* server will catch up on next poll */ }
     pendingRequests = {};
@@ -441,15 +570,11 @@
 
   // --- Init ---
   window.TronWallet.discoverWallets();
-  fetch('/api/session').then(function(res) {
-    return res.json();
-  }).then(function(data) {
-    sessionId = data.sessionId;
+  if (!sessionId) {
+    markSessionExpired();
+  } else {
     setStatus('Waiting for request...', 'info');
     setInterval(pollPending, 1000);
     pollPending();
-  }).catch(function() {
-    setInterval(pollPending, 1000);
-    pollPending();
-  });
+  }
 })();

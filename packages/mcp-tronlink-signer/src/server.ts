@@ -20,10 +20,13 @@ export function createMcpServer(signer: TronSigner): McpServer {
   const SIGN_NOTICE = "⚠️ ACTION REQUIRED: Please switch to your browser and approve/reject this request in the TronLink Signer page.";
 
   function signingResult(result: unknown) {
+    const status = (result as { status?: string })?.status;
+    const isError = status === "failed";
     return {
       content: [
         { type: "text" as const, text: JSON.stringify(result) },
       ],
+      ...(isError ? { isError: true } : {}),
     };
   }
 
