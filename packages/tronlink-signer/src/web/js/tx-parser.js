@@ -223,8 +223,16 @@
             var decoded = decodeCall(argsHex, known.inputs);
             baseRows.push({ l: 'Method', v: known.name, k: 'method' });
             if (decoded) {
+              // 0x23b872dd is shared between TRC20 transferFrom(amount) and TRC721
+              // transferFrom(tokenId). We don't know which until detectTokenKind
+              // resolves async — surface the ambiguity in the row label up-front,
+              // and let fetchTrc20AmountForCall narrow it to "amount"/"tokenId"
+              // once the probe returns. ambiguousKind on _contractCall tells
+              // app.js to gate the Approve button until that resolution lands.
+              var ambiguousTransferFrom = methodSig === '23b872dd';
               decoded.rows.forEach(function(arg, i) {
-                baseRows.push({ l: arg.name, v: arg.display, k: 'arg-' + i });
+                var label = (ambiguousTransferFrom && i === 2) ? 'amount or tokenId' : arg.name;
+                baseRows.push({ l: label, v: arg.display, k: 'arg-' + i });
               });
               info._contractCall = {
                 contractHex: v.contract_address,
@@ -233,7 +241,8 @@
                 resolved: true,
                 rawArgs: decoded.raw,
                 inputs: known.inputs,
-                tokenAmounts: known.tokenAmounts
+                tokenAmounts: known.tokenAmounts,
+                ambiguousKind: ambiguousTransferFrom
               };
             } else {
               baseRows.push({ l: 'Data', v: truncateMiddle('0x' + (v.data || ''), 120), k: 'data' });

@@ -5,8 +5,18 @@ const NetworkSchema = z
   .optional()
   .describe("Tron network to use (default: mainnet)");
 
+// Tron base58 addresses are 34 chars, start with 'T', and use the base58 alphabet
+// (digits 1-9 + letters minus 0, O, I, l). This regex catches the obvious garbage
+// at the MCP boundary so the LLM sees a clean validation error instead of a
+// TronWeb stack trace four frames deeper. It does NOT verify the base58check
+// trailing checksum — TronWeb.isAddress() handles that at the SDK layer.
+const TRON_BASE58_RE = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
+const TronAddressSchema = z
+  .string()
+  .regex(TRON_BASE58_RE, "must be a Tron base58 address starting with 'T' (34 chars)");
+
 export const SendTrxSchema = z.object({
-  to: z.string().describe("Recipient Tron address (base58)"),
+  to: TronAddressSchema.describe("Recipient Tron address (base58)"),
   amount: z
     .union([
       z.number().positive(),
@@ -19,8 +29,8 @@ export const SendTrxSchema = z.object({
 });
 
 export const SendTrc20Schema = z.object({
-  contractAddress: z.string().describe("TRC20 token contract address (base58)"),
-  to: z.string().describe("Recipient Tron address (base58)"),
+  contractAddress: TronAddressSchema.describe("TRC20 token contract address (base58)"),
+  to: TronAddressSchema.describe("Recipient Tron address (base58)"),
   amount: z
     .string()
     .describe("Amount of tokens to send in human-readable units (e.g. '1.5' for 1.5 USDT). Decimals conversion is handled automatically."),

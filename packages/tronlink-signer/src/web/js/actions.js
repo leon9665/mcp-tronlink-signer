@@ -155,12 +155,20 @@
         // ("Provided chainId X must match active chainId Y"). Validating here too
         // keeps us safe if a future TronLink build relaxes that check, and gives
         // the caller a clearer error before the wallet round-trip.
+        //
+        // chainId itself is optional per EIP-712, so leave undefined/null alone
+        // (legitimate chain-agnostic flows: login, off-chain consent). But if a
+        // value *was* provided, it must be a finite number — silently accepting
+        // NaN/garbage would defeat the defense-in-depth this block exists for.
         var TRON_CHAIN_IDS = { mainnet: 728126428, nile: 3448148188, shasta: 2494104990 };
         var currentNetwork = window.TronWallet.getCurrentNetwork();
         var expectedChainId = TRON_CHAIN_IDS[currentNetwork];
-        if (domain.chainId !== undefined && domain.chainId !== null && expectedChainId) {
+        if (domain.chainId !== undefined && domain.chainId !== null) {
           var claimed = Number(domain.chainId);
-          if (Number.isFinite(claimed) && claimed !== expectedChainId) {
+          if (!Number.isFinite(claimed)) {
+            throw new Error('typedData.domain.chainId must be a finite number, got ' + JSON.stringify(domain.chainId));
+          }
+          if (expectedChainId && claimed !== expectedChainId) {
             throw new Error(
               'chainId mismatch: typedData claims ' + domain.chainId +
               ', wallet is on ' + currentNetwork + ' (chainId ' + expectedChainId + ')'

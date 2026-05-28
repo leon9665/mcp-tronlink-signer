@@ -1,25 +1,52 @@
 // Wallet discovery, connection, and network management
 (function() {
+  // TIP-6963 announces are first-come-first-served by spec. Any installed
+  // extension can claim to be a Tron wallet — we MUST pin to TronLink's
+  // official rdns rather than trusting the first responder, otherwise a
+  // malicious extension that races faster gets to intercept every sign call
+  // through a UI that's branded "TronLink Signer".
+  //
+  // rdns source: TronLink content-script EIP6963ProviderInfo.rdns.
+  var TRONLINK_RDNS = 'org.tronlink.www';
+
+  var _candidates = [];
   var _providerDetail = null;
 
   function discoverWallets() {
     window.addEventListener('TIP6963:announceProvider', function(e) {
-      if (!_providerDetail) {
-        _providerDetail = e.detail;
-      }
+      if (e && e.detail) _candidates.push(e.detail);
     });
     window.dispatchEvent(new Event('TIP6963:requestProvider'));
   }
 
+  function findTronLinkCandidate() {
+    for (var i = 0; i < _candidates.length; i++) {
+      var c = _candidates[i];
+      if (c && c.info && c.info.rdns === TRONLINK_RDNS && c.provider) return c;
+    }
+    return null;
+  }
+
   function getProviderDetail() {
-    return _providerDetail;
+    if (_providerDetail) return _providerDetail;
+    var match = findTronLinkCandidate();
+    if (match) { _providerDetail = match; return match; }
+    return null;
   }
 
   function getProvider() {
-    if (_providerDetail && _providerDetail.provider) {
-      return _providerDetail.provider;
+    var detail = getProviderDetail();
+    if (detail && detail.provider) return detail.provider;
+    // Legacy fallback: pre-TIP-6963 TronLink builds inject window.tron /
+    // window.tronLink directly. We can't verify rdns at this layer, so only
+    // consult the globals when *no* TIP-6963 announces arrived at all — if
+    // any did, the modern path is in play and a stray window.tron is most
+    // likely a rogue injector. Worst case: detection fails and waitForWallet's
+    // existing "install TronLink" error fires.
+    if (_candidates.length === 0) {
+      return window.tron || window.tronLink || null;
     }
-    return window.tron || window.tronLink || null;
+    return null;
   }
 
   function getTronWeb() {

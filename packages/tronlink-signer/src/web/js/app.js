@@ -10,6 +10,7 @@
   var retryBtn = document.getElementById('retryBtn');
   var approveBtn = document.getElementById('approveBtn');
   var rejectBtn = document.getElementById('rejectBtn');
+  var APPROVE_LABEL_DEFAULT = approveBtn.textContent;
 
   var pendingRequests = {};   // id -> request
   var pendingRequest = null;  // currently active request object
@@ -145,7 +146,18 @@
     var row = document.createElement('div');
     row.className = 'detail-row';
     if (rowKey) row.setAttribute('data-row-key', rowKey);
-    row.innerHTML = '<span class="label">' + label + '</span><span class="value">' + escapeHtml(String(value)) + '</span>';
+    // Build with textContent — the previous innerHTML concatenation escaped
+    // `value` but not `label`. All current callers pass static strings, but
+    // this page holds signing capability (sessionId + /api/complete/*id*) so
+    // an XSS regression would let any future malicious dynamic label forge
+    // approvals. textContent removes the foot-gun entirely.
+    var l = document.createElement('span');
+    l.className = 'label';
+    l.textContent = label;
+    var v = document.createElement('span');
+    v.className = 'value';
+    v.textContent = String(value);
+    row.append(l, v);
     detailsEl.appendChild(row);
   }
 
@@ -154,12 +166,18 @@
     rejectBtn.disabled = true;
   }
 
+  function resetApproveButton() {
+    approveBtn.disabled = false;
+    approveBtn.textContent = APPROVE_LABEL_DEFAULT;
+  }
+
   function clearActiveUI() {
     detailsEl.innerHTML = '';
     typeBadgeEl.style.display = 'none';
     networkBadgeEl.style.display = 'none';
     buttonGroup.style.display = 'none';
     retryGroup.style.display = 'none';
+    approveBtn.textContent = APPROVE_LABEL_DEFAULT;
   }
 
   // --- Tab bar ---
@@ -254,7 +272,7 @@
     console.error('[switchTo]', { id: id, type: req.type, network: req.network });
     currentRequestId = id;
     pendingRequest = req;
-    approveBtn.disabled = false;
+    resetApproveButton();
     rejectBtn.disabled = false;
     buttonGroup.style.display = 'none';
     retryGroup.style.display = 'none';
@@ -341,7 +359,24 @@
       var cc = parsed._contractCall;
       if (cc.resolved) {
         if (cc.tokenAmounts && cc.tokenAmounts.length) {
-          window.TxParser.fetchTrc20AmountForCall(cc, detailsEl, isStale);
+          // For selectors shared between fungible and NFT semantics (currently
+          // only 0x23b872dd transferFrom), the displayed "amount" can actually
+          // be a tokenId. Block Approve until detectTokenKind resolves so the
+          // user can't sign a stale misread. fetchTrc20AmountForCall swallows
+          // errors internally, so this Promise settles either way; we always
+          // restore the button in the .then/.catch.
+          if (cc.ambiguousKind) {
+            approveBtn.disabled = true;
+            approveBtn.textContent = 'Identifying token…';
+          }
+          Promise.resolve(window.TxParser.fetchTrc20AmountForCall(cc, detailsEl, isStale))
+            .then(function() {
+              if (isStale()) return;
+              if (cc.ambiguousKind) resetApproveButton();
+            }, function() {
+              if (isStale()) return;
+              if (cc.ambiguousKind) resetApproveButton();
+            });
         }
       } else {
         window.TxParser.fetchContractCallAbi(cc, detailsEl, isStale);
