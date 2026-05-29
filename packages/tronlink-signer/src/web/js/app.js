@@ -11,6 +11,10 @@
   var approveBtn = document.getElementById('approveBtn');
   var rejectBtn = document.getElementById('rejectBtn');
   var APPROVE_LABEL_DEFAULT = approveBtn.textContent;
+  // Cap how long Approve stays disabled while identifying an ambiguous
+  // transferFrom (TRC20 amount vs TRC721 tokenId). A slow/unreachable node must
+  // not strand the user on a disabled button — see runAsyncLookups.
+  var IDENTIFY_TIMEOUT_MS = 8000;
 
   var pendingRequests = {};   // id -> request
   var pendingRequest = null;  // currently active request object
@@ -359,24 +363,32 @@
       var cc = parsed._contractCall;
       if (cc.resolved) {
         if (cc.tokenAmounts && cc.tokenAmounts.length) {
+          // fetchTrc20AmountForCall swallows errors internally, so this Promise
+          // settles either way.
+          var probe = Promise.resolve(window.TxParser.fetchTrc20AmountForCall(cc, detailsEl, isStale));
           // For selectors shared between fungible and NFT semantics (currently
-          // only 0x23b872dd transferFrom), the displayed "amount" can actually
-          // be a tokenId. Block Approve until detectTokenKind resolves so the
-          // user can't sign a stale misread. fetchTrc20AmountForCall swallows
-          // errors internally, so this Promise settles either way; we always
-          // restore the button in the .then/.catch.
+          // only 0x23b872dd transferFrom), the displayed "amount" can actually be
+          // a tokenId. Block Approve until detectTokenKind resolves so the user
+          // can't sign a stale misread — but cap the wait: a slow/unreachable node
+          // must not strand the user on a permanently-disabled button (they could
+          // otherwise only Reject). On timeout, re-enable and flag the unresolved
+          // ambiguity so the "amount or tokenId" row gets a deliberate look.
           if (cc.ambiguousKind) {
             approveBtn.disabled = true;
             approveBtn.textContent = 'Identifying token…';
+            var settled = false;
+            var release = function(timedOut) {
+              if (settled || isStale()) return;
+              settled = true;
+              resetApproveButton();
+              if (timedOut) {
+                setStatus('Could not confirm token type (network slow). This may be an NFT transfer — check the "amount or tokenId" value before approving.', 'error');
+              }
+            };
+            var idTimer = setTimeout(function() { release(true); }, IDENTIFY_TIMEOUT_MS);
+            probe.then(function() { clearTimeout(idTimer); release(false); },
+                       function() { clearTimeout(idTimer); release(false); });
           }
-          Promise.resolve(window.TxParser.fetchTrc20AmountForCall(cc, detailsEl, isStale))
-            .then(function() {
-              if (isStale()) return;
-              if (cc.ambiguousKind) resetApproveButton();
-            }, function() {
-              if (isStale()) return;
-              if (cc.ambiguousKind) resetApproveButton();
-            });
         }
       } else {
         window.TxParser.fetchContractCallAbi(cc, detailsEl, isStale);
