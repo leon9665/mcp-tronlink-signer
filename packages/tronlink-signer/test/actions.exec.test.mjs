@@ -16,8 +16,10 @@ const SRC = readFileSync(join(here, '..', 'src', 'web', 'js', 'actions.js'), 'ut
 const hexOf = (s) => Buffer.from(s, 'utf8').toString('hex');
 const word = (n) => BigInt(n).toString(16).padStart(64, '0'); // 32-byte uint return
 
-// Mock tronWeb. opts.decimalsHex controls the auto-detect decimals() result
-// (null => no result); opts.broadcast controls sendRawTransaction's return.
+// Mock tronWeb. opts.decimalsHex controls the decimals() result (null => empty
+// result, i.e. no value returned); opts.decimalsThrow makes the decimals() read
+// THROW (simulates a node failure or a non-contract address — both of which throw
+// in real TronWeb); opts.broadcast controls sendRawTransaction's return.
 function makeTronWeb(opts = {}) {
   const calls = { sendTrx: [], triggerConst: [], triggerSmart: [], sign: [], sendRaw: [], signMsg: [] };
   const tw = {
@@ -26,7 +28,10 @@ function makeTronWeb(opts = {}) {
       sendTrx: async (to, sun) => { calls.sendTrx.push({ to, sun }); return { __trx: true, to, sun }; },
       triggerConstantContract: async (addr, sel, _o, params) => {
         calls.triggerConst.push({ addr, sel, params });
-        if (sel === 'decimals()') return { constant_result: opts.decimalsHex == null ? [] : [opts.decimalsHex] };
+        if (sel === 'decimals()') {
+          if (opts.decimalsThrow) throw new Error(opts.decimalsThrow);
+          return { constant_result: opts.decimalsHex == null ? [] : [opts.decimalsHex] };
+        }
         return { constant_result: [] };
       },
       triggerSmartContract: async (addr, sig, _o, params) => {
@@ -82,38 +87,62 @@ test('send_trx: large value keeps full precision (no float loss)', async () => {
   assert.equal(calls.sendTrx[0].sun, '1000000123456');
 });
 
-// --- send_trc20 amount → raw (decimals) -------------------------------------
+// --- send_trc20 amount → raw (decimals are ALWAYS read from the contract) ----
+// The token's precision is always resolved from on-chain decimals(); a provided
+// `decimals` is an assertion that must match, never an override. If decimals()
+// can't be read & confirmed for ANY reason, the send fails closed.
 
-test('send_trc20: explicit 18 decimals — "0.0001" -> 1e14 raw, no decimals() probe', async () => {
-  const { tw, calls } = makeTronWeb();
-  await run(tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '0.0001', decimals: 18 });
-  assert.equal(calls.triggerConst.length, 0, 'explicit decimals must skip auto-detect');
-  assert.equal(calls.triggerSmart[0].params[1].value, '100000000000000'); // 0.0001 * 1e18
-});
-
-test('send_trc20: auto-detects decimals via decimals() when omitted', async () => {
+test('send_trc20: omitted decimals are read from decimals() — "1.5" @6dp -> 1.5e6', async () => {
   const { tw, calls } = makeTronWeb({ decimalsHex: word(6) });
   await run(tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1.5' });
   assert.equal(calls.triggerConst[0].sel, 'decimals()');
   assert.equal(calls.triggerSmart[0].params[1].value, '1500000'); // 1.5 * 1e6
 });
 
-test('send_trc20: auto-detect failure and out-of-range both throw (no silent default)', async () => {
-  const noResult = makeTronWeb({ decimalsHex: null });
-  await assert.rejects(run(noResult.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1' }), /Could not auto-detect/);
+test('send_trc20: provided decimals matching on-chain decimals() proceeds — "0.0001" @18dp -> 1e14', async () => {
+  const { tw, calls } = makeTronWeb({ decimalsHex: word(18) });
+  await run(tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '0.0001', decimals: 18 });
+  assert.equal(calls.triggerSmart[0].params[1].value, '100000000000000'); // 0.0001 * 1e18
+});
+
+test('send_trc20: provided decimals that DISAGREES with on-chain decimals() is refused (no over-send)', async () => {
+  const { tw, calls } = makeTronWeb({ decimalsHex: word(6) }); // contract is really 6dp
+  await assert.rejects(
+    run(tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1.5', decimals: 18 }),
+    /Provided decimals \(18\) disagrees with the contract's on-chain decimals\(\) \(6\).*10\^12/,
+  );
+  assert.equal(calls.triggerSmart.length, 0, 'must not build the transfer on a decimals mismatch');
+});
+
+test('send_trc20: fails closed when the decimals() READ THROWS (node failure / non-contract), even with decimals provided', async () => {
+  const thrown = makeTronWeb({ decimalsThrow: 'Smart contract is not exist.' });
+  await assert.rejects(
+    run(thrown.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '0.0001', decimals: 18 }),
+    /Could not read the token contract's decimals\(\).*Smart contract is not exist.*Refusing to send/,
+  );
+  assert.equal(thrown.calls.triggerSmart.length, 0, 'must not build the transfer when decimals cannot be read');
+});
+
+test('send_trc20: fails closed when decimals() returns empty or out-of-range, even with decimals provided', async () => {
+  const empty = makeTronWeb({ decimalsHex: null });
+  await assert.rejects(run(empty.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1', decimals: 6 }), /no valid decimals\(\)/);
+  assert.equal(empty.calls.triggerSmart.length, 0, 'no transfer built on empty decimals()');
   const tooBig = makeTronWeb({ decimalsHex: word(30) });
-  await assert.rejects(run(tooBig.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1' }), /out of range/);
+  await assert.rejects(run(tooBig.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1', decimals: 30 }), /no valid decimals\(\)/);
+  // the omitted-decimals path fails closed the same way (no silent default)
+  const emptyOmit = makeTronWeb({ decimalsHex: null });
+  await assert.rejects(run(emptyOmit.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1' }), /no valid decimals\(\)/);
 });
 
-test('send_trc20: too many decimal places, decimals>18, and zero-after-conversion throw', async () => {
-  const t = makeTronWeb();
-  await assert.rejects(run(t.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1.123', decimals: 2 }), /too many decimal places/);
-  await assert.rejects(run(t.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1.5', decimals: 20 }), /Decimals too large/);
-  await assert.rejects(run(t.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '0', decimals: 6 }), /Amount is zero/);
+test('send_trc20: amount validation runs once decimals() is confirmed (too many places / zero)', async () => {
+  const tooMany = makeTronWeb({ decimalsHex: word(6) });
+  await assert.rejects(run(tooMany.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '1.1234567', decimals: 6 }), /too many decimal places/);
+  const zero = makeTronWeb({ decimalsHex: word(6) });
+  await assert.rejects(run(zero.tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '0', decimals: 6 }), /Amount is zero/);
 });
 
-test('send_trc20: 0-decimals token encodes the whole number as-is', async () => {
-  const { tw, calls } = makeTronWeb();
+test('send_trc20: 0-decimals token (on-chain decimals()=0) encodes the whole number as-is', async () => {
+  const { tw, calls } = makeTronWeb({ decimalsHex: word(0) });
   await run(tw, 'send_trc20', { contractAddress: 'Tc', to: 'Tto', amount: '42', decimals: 0 });
   assert.equal(calls.triggerSmart[0].params[1].value, '42');
 });

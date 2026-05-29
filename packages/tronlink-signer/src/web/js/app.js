@@ -359,13 +359,22 @@
   // "Amount" row that holds "10 TRX"). isStale snapshots the request id at
   // dispatch time so each lookup can no-op on stale resolutions.
   function runAsyncLookups(req) {
-    if (!req || req.type !== 'sign_transaction') return;
+    if (!req) return;
     var data = req.data || {};
+    var snapshotId = req.id;
+    var isStale = function() { return currentRequestId !== snapshotId; };
+    // send_trc20 carries only high-level fields (no raw tx to parse) — resolve the
+    // token's decimals/symbol so the Amount/Decimals rows show real precision
+    // (e.g. "0.0001 USDD" / "18") instead of the "auto-detect from contract"
+    // placeholder. Reuses the same fetchTokenMeta as the sign_transaction path.
+    if (req.type === 'send_trc20') {
+      window.TxParser.fetchSendTrc20Display(data.contractAddress, data.amount, data.decimals, detailsEl, isStale);
+      return;
+    }
+    if (req.type !== 'sign_transaction') return;
     var parsed;
     try { parsed = window.TxParser.parseTransaction(data.transaction); } catch (_) { return; }
     if (!parsed) return;
-    var snapshotId = req.id;
-    var isStale = function() { return currentRequestId !== snapshotId; };
     if (parsed._trc10 && req.networkConfig) {
       window.TxParser.fetchTrc10Info(parsed._trc10, detailsEl, req.networkConfig.fullHost, isStale);
     }

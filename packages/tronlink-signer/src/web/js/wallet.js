@@ -170,9 +170,41 @@
     return (tronWeb && tronWeb.defaultAddress && tronWeb.defaultAddress.base58) || null;
   }
 
+  // TronLink exposes two provider styles with DIFFERENT account-request methods:
+  // the modern window.tron speaks eth_requestAccounts; the legacy window.tronLink
+  // speaks tron_requestAccounts. getProvider() may return either (a TIP-6963
+  // announce vs the injected-global fallback, and which one wins isn't fully
+  // deterministic), so connecting must be method-agnostic: try one, and if the
+  // provider answers "Unknown method called" (method not supported), try the
+  // other. Either may RESOLVE with a { code } (4001 user-rejected / 4000 already
+  // queued) instead of throwing — surface those clearly and do NOT fall through.
+  function isUnknownMethodError(e) {
+    var msg = (e && (e.message || e.data)) || (typeof e === 'string' ? e : '') || '';
+    return (e && e.code === -32601) || /unknown method|not supported|method not found/i.test(String(msg));
+  }
+  function assertAccountCode(res) {
+    var code = res && res.code;
+    if (code === 4001) throw new Error('You rejected the wallet connection. Click Retry to approve it.');
+    if (code === 4000) throw new Error('A TronLink connection request is already open. Approve it (or close duplicate signer tabs), then click Retry.');
+    return res;
+  }
+  async function requestAccounts(provider) {
+    var methods = ['tron_requestAccounts', 'eth_requestAccounts'];
+    var lastErr;
+    for (var i = 0; i < methods.length; i++) {
+      try {
+        return assertAccountCode(await provider.request({ method: methods[i] }));
+      } catch (e) {
+        lastErr = e;
+        if (!isUnknownMethodError(e)) throw e; // real rejection/timeout — don't retry the other method
+      }
+    }
+    throw lastErr;
+  }
+
   async function ensureConnected() {
     if (isConnected()) return;
-    await getProvider().request({ method: 'tron_requestAccounts' });
+    await requestAccounts(getProvider());
     await new Promise(function(r) { setTimeout(r, 500); });
   }
 
@@ -186,23 +218,13 @@
     if (!isConnected()) {
       setStatus('Connecting wallet...', 'waiting');
       try {
-        // TronLink's account-request method is tron_requestAccounts. The Ethereum
-        // eth_requestAccounts is NOT supported — TronLink answers it with
-        // "[commonRequest]: Unknown method called", which surfaced as a generic
-        // "connection failed" on every first-time (not-yet-authorized) connect.
-        // tron_requestAccounts RESOLVES with a {code} (it does not throw on
-        // rejection): 200 = ok, 4001 = user rejected, 4000 = already in queue.
-        var accountRes = await provider.request({ method: 'tron_requestAccounts' });
-        var code = accountRes && accountRes.code;
-        if (code === 4001) {
-          throw new Error('You rejected the wallet connection. Click Retry to approve it.');
-        }
-        if (code === 4000) {
-          throw new Error('A TronLink connection request is already open. Approve it (or close duplicate signer tabs), then click Retry.');
-        }
+        // Method-agnostic connect — works whether getProvider() returned the
+        // modern window.tron (eth_requestAccounts) or legacy window.tronLink
+        // (tron_requestAccounts). See requestAccounts().
+        await requestAccounts(provider);
       } catch (e) {
-        console.error('[ensureWalletReady] tron_requestAccounts failed:', e && e.code, e && e.message, e);
-        throw new Error(e.message || 'Wallet connection failed. Please unlock TronLink and click Retry.');
+        console.error('[ensureWalletReady] requestAccounts failed:', e && e.code, e && e.message, e);
+        throw new Error((e && e.message) || 'Wallet connection failed. Please unlock TronLink and click Retry.');
       }
     }
 

@@ -126,6 +126,57 @@ test('TRC20 amount: an over-long symbol is dropped (decodeAbiString 128B cap), a
   assert.equal(details.rowByLabel('Amount').value, '2'); // no symbol suffix
 });
 
+// --- fetchSendTrc20Display: annotate the send_trc20 approval rows ------------
+
+test('send_trc20 display: resolves symbol + real decimals when auto-detecting', async () => {
+  const tw = makeTronWeb({ responder: (fn) => (fn === 'decimals()' ? word(18) : abiString('USDD')) });
+  const TxParser = load(tw);
+  const details = makeDetails([
+    { key: 'amt', label: 'Amount', value: '0.0001' },
+    { key: 'dec', label: 'Decimals', value: 'auto-detect from contract' },
+  ]);
+  // base58 contract address (starts with 'T') — must be passed through, not hex-decoded
+  await TxParser.fetchSendTrc20Display('TZ78R2E6ejfFhxq8hxrmuqT6hGBxjHQbo4', '0.0001', undefined, details, noStale);
+  assert.equal(details.rowByLabel('Amount').value, '0.0001 USDD');
+  assert.equal(details.rowByLabel('Decimals').value, '18');
+});
+
+test('send_trc20 display: caller-pinned decimals row is left untouched', async () => {
+  const tw = makeTronWeb({ responder: (fn) => (fn === 'decimals()' ? word(6) : abiString('USDT')) });
+  const TxParser = load(tw);
+  const details = makeDetails([
+    { key: 'amt', label: 'Amount', value: '1.5' },
+    { key: 'dec', label: 'Decimals', value: '6' },
+  ]);
+  await TxParser.fetchSendTrc20Display('TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', '1.5', 6, details, noStale);
+  assert.equal(details.rowByLabel('Amount').value, '1.5 USDT');   // symbol still annotated
+  assert.equal(details.rowByLabel('Decimals').value, '6');        // unchanged (caller pinned)
+});
+
+test('send_trc20 display: caller-pinned decimals that disagrees with the contract is flagged', async () => {
+  const tw = makeTronWeb({ responder: (fn) => (fn === 'decimals()' ? word(6) : abiString('USDT')) });
+  const TxParser = load(tw);
+  const details = makeDetails([
+    { key: 'amt', label: 'Amount', value: '1.5' },
+    { key: 'dec', label: 'Decimals', value: '18' },
+  ]);
+  await TxParser.fetchSendTrc20Display('TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', '1.5', 18, details, noStale);
+  assert.match(details.rowByLabel('Decimals').value, /18.*contract reports 6/); // conflict surfaced
+  assert.match(details.rowByLabel('Amount').value, /mismatch/);                  // amount no longer reassuring
+});
+
+test('send_trc20 display: no decimals() result keeps the static placeholder', async () => {
+  const tw = makeTronWeb({ responder: () => null });
+  const TxParser = load(tw);
+  const details = makeDetails([
+    { key: 'amt', label: 'Amount', value: '1' },
+    { key: 'dec', label: 'Decimals', value: 'auto-detect from contract' },
+  ]);
+  await TxParser.fetchSendTrc20Display('TZ78R2E6ejfFhxq8hxrmuqT6hGBxjHQbo4', '1', undefined, details, noStale);
+  assert.equal(details.rowByLabel('Amount').value, '1');
+  assert.equal(details.rowByLabel('Decimals').value, 'auto-detect from contract');
+});
+
 // --- fetchTrc20AmountForCall: detectTokenKind + transferFrom narrowing -------
 
 function transferFromCc(tokenId) {

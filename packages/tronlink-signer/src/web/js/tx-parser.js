@@ -433,7 +433,12 @@
   // amount by 10^12. The selector call needs no ABI and matches the send path
   // (actions.js). Returns { decimals, symbol } or null when decimals is unknown.
   async function fetchTokenMeta(tronWeb, contractHexOrBase58) {
-    var addr = fromHexAddress(contractHexOrBase58);
+    // Accept both forms: base58 (starts with 'T', e.g. send_trc20's contractAddress)
+    // is passed through as-is; 41-hex (from a parsed raw tx) is normalized to base58.
+    // triggerConstantContract accepts either, but fromHexAddress would mangle base58.
+    var addr = (typeof contractHexOrBase58 === 'string' && contractHexOrBase58.charAt(0) === 'T')
+      ? contractHexOrBase58
+      : fromHexAddress(contractHexOrBase58);
     var caller = (tronWeb.defaultAddress && tronWeb.defaultAddress.base58) || addr;
     var decRes = await tronWeb.transactionBuilder.triggerConstantContract(addr, 'decimals()', {}, [], caller);
     var decHex = decRes && decRes.constant_result && decRes.constant_result[0];
@@ -472,6 +477,43 @@
       if (stale(isStale)) return;
       updateAmountRow(detailsEl, trc20.rawAmount + ' (raw)');
     }
+  }
+
+  // For the send_trc20 request type the approval page only has the high-level
+  // fields (contract / to / amount) — there is no raw tx to parse, so unlike the
+  // sign_transaction path it never ran the token-metadata probe. Resolve
+  // decimals/symbol here so the Amount row reads "<amount> <symbol>" and the
+  // Decimals row shows the real precision instead of "auto-detect from contract".
+  // `contract` is the base58 address; `providedDecimals` non-null means the caller
+  // pinned decimals (leave that row alone). Best-effort: on any failure the static
+  // placeholder display is kept.
+  async function fetchSendTrc20Display(contract, amount, providedDecimals, detailsEl, isStale) {
+    try {
+      var tronWeb = window.TronWallet.getTronWeb();
+      if (!tronWeb) {
+        await window.TronWallet.waitForWallet(5000);
+        tronWeb = window.TronWallet.getTronWeb();
+      }
+      if (!tronWeb) return;
+      if (stale(isStale)) return;
+      var meta = await fetchTokenMeta(tronWeb, contract);
+      if (stale(isStale)) return;
+      if (!meta) return;
+      var pinned = !(providedDecimals === undefined || providedDecimals === null);
+      // Caller pinned a precision that contradicts the contract: the amount would be
+      // mis-scaled by 10^|diff| (18 vs a real 6 over-sends by 10^12). The SDK refuses
+      // to build this tx, but surface the conflict on the rows the human approves
+      // instead of quietly showing "<amount> <symbol>" as if it were fine.
+      if (pinned && Number.isFinite(meta.decimals) && Number(providedDecimals) !== meta.decimals) {
+        updateRowByLabel(detailsEl, 'Decimals', String(providedDecimals) + ' ⚠ contract reports ' + meta.decimals);
+        if (meta.symbol) updateRowByLabel(detailsEl, 'Amount', String(amount) + ' ' + meta.symbol + ' — ⚠ decimals mismatch');
+        return;
+      }
+      if (meta.symbol) updateRowByLabel(detailsEl, 'Amount', String(amount) + ' ' + meta.symbol);
+      if (!pinned) {
+        updateRowByLabel(detailsEl, 'Decimals', String(meta.decimals));
+      }
+    } catch(_) { /* keep the static display */ }
   }
 
   async function fetchWithdrawAmount(ownerAddress, detailsEl, isStale) {
@@ -716,6 +758,7 @@
     parseTransaction: parseTransaction,
     fetchTrc10Info: fetchTrc10Info,
     fetchTrc20Info: fetchTrc20Info,
+    fetchSendTrc20Display: fetchSendTrc20Display,
     fetchWithdrawAmount: fetchWithdrawAmount,
     fetchTrc20AmountForCall: fetchTrc20AmountForCall,
     fetchContractCallAbi: fetchContractCallAbi

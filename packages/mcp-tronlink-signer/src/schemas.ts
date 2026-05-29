@@ -41,7 +41,7 @@ export const SendTrc20Schema = z.object({
     .min(0)
     .max(18)
     .optional()
-    .describe("Token decimals. Omit to auto-detect via the contract's decimals() view — required to avoid 10^N magnitude errors on non-6dp tokens (USDD/SUN/JST = 18dp)."),
+    .describe("Optional. The token's precision is always read from the contract's on-chain decimals(); if provided, this value is checked against it and the send is REFUSED on mismatch (guards against 10^N magnitude errors, e.g. USDD/SUN/JST = 18dp). Omit to use the on-chain value directly."),
   network: NetworkSchema,
 });
 
