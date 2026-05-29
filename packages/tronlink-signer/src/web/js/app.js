@@ -20,6 +20,13 @@
   var pendingRequest = null;  // currently active request object
   var currentRequestId = null;
   var polling = false;
+  // Bumped whenever the active request changes or the UI is torn down. The
+  // transferFrom identify-gating captures the cycle at setup; its timer/probe
+  // callbacks no-op if the cycle has since advanced — so switching away from an
+  // ambiguous request (and back, restarting a fresh gating cycle) can't let the
+  // stale timer re-enable Approve or flash a spurious "network slow" warning.
+  var identifyCycle = 0;
+  var activeIdentifyTimer = null;
   // sessionId is injected into the HTML by the server (per-pageload). It never
   // travels in a response body — any local process that could read it over HTTP
   // would be able to forge approvals.
@@ -175,7 +182,15 @@
     approveBtn.textContent = APPROVE_LABEL_DEFAULT;
   }
 
+  // Invalidate any in-flight transferFrom identify-gating: advance the cycle (so
+  // the pending timer/probe callbacks no-op) and clear the outstanding timer.
+  function cancelIdentifyGating() {
+    identifyCycle++;
+    if (activeIdentifyTimer) { clearTimeout(activeIdentifyTimer); activeIdentifyTimer = null; }
+  }
+
   function clearActiveUI() {
+    cancelIdentifyGating();
     detailsEl.innerHTML = '';
     typeBadgeEl.style.display = 'none';
     networkBadgeEl.style.display = 'none';
@@ -273,6 +288,7 @@
     if (id === currentRequestId) return;
     var req = pendingRequests[id];
     if (!req) return;
+    cancelIdentifyGating();
     console.error('[switchTo]', { id: id, type: req.type, network: req.network });
     currentRequestId = id;
     pendingRequest = req;
@@ -374,18 +390,25 @@
           // otherwise only Reject). On timeout, re-enable and flag the unresolved
           // ambiguity so the "amount or tokenId" row gets a deliberate look.
           if (cc.ambiguousKind) {
+            // Capture the gating cycle: a later switch/teardown advances it, so a
+            // stale timer/probe from this cycle can't re-enable Approve on a newer
+            // request — or on this same request re-opened with a fresh gating.
+            var myCycle = identifyCycle;
             approveBtn.disabled = true;
             approveBtn.textContent = 'Identifying token…';
             var settled = false;
             var release = function(timedOut) {
-              if (settled || isStale()) return;
+              if (settled || isStale() || myCycle !== identifyCycle) return;
               settled = true;
+              activeIdentifyTimer = null;
               resetApproveButton();
               if (timedOut) {
                 setStatus('Could not confirm token type (network slow). This may be an NFT transfer — check the "amount or tokenId" value before approving.', 'error');
               }
             };
+            if (activeIdentifyTimer) clearTimeout(activeIdentifyTimer);
             var idTimer = setTimeout(function() { release(true); }, IDENTIFY_TIMEOUT_MS);
+            activeIdentifyTimer = idTimer;
             probe.then(function() { clearTimeout(idTimer); release(false); },
                        function() { clearTimeout(idTimer); release(false); });
           }
