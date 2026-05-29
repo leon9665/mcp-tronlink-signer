@@ -41,14 +41,14 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "tronlink-signer": "workspace:*",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "tsup": "^8.5.1",
-    "tsx": "^4.20.0",
-    "typescript": "^5.7.3"
+    "@types/node": "25.6.0",
+    "tsup": "8.5.1",
+    "tsx": "4.22.3",
+    "typescript": "5.9.3"
   }
 }
