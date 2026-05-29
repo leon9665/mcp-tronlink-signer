@@ -186,12 +186,23 @@
     if (!isConnected()) {
       setStatus('Connecting wallet...', 'waiting');
       try {
-        var accountRes = await provider.request({ method: 'eth_requestAccounts' });
-        if (accountRes && accountRes.code === 4001) {
-          throw new Error('User rejected wallet connection.');
+        // TronLink's account-request method is tron_requestAccounts. The Ethereum
+        // eth_requestAccounts is NOT supported — TronLink answers it with
+        // "[commonRequest]: Unknown method called", which surfaced as a generic
+        // "connection failed" on every first-time (not-yet-authorized) connect.
+        // tron_requestAccounts RESOLVES with a {code} (it does not throw on
+        // rejection): 200 = ok, 4001 = user rejected, 4000 = already in queue.
+        var accountRes = await provider.request({ method: 'tron_requestAccounts' });
+        var code = accountRes && accountRes.code;
+        if (code === 4001) {
+          throw new Error('You rejected the wallet connection. Click Retry to approve it.');
+        }
+        if (code === 4000) {
+          throw new Error('A TronLink connection request is already open. Approve it (or close duplicate signer tabs), then click Retry.');
         }
       } catch (e) {
-        throw new Error(e.message || 'Wallet connection failed. Please click Retry.');
+        console.error('[ensureWalletReady] tron_requestAccounts failed:', e && e.code, e && e.message, e);
+        throw new Error(e.message || 'Wallet connection failed. Please unlock TronLink and click Retry.');
       }
     }
 
